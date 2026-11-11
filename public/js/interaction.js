@@ -20,6 +20,7 @@ AG.interaction = (() => {
   const answered = new Set();
   let sender = null;
   let mode = 'assistant';  // 'assistant' | 'console'
+  let lastStartupCommitTime = 0;
 
   function setSender(fn) {
     sender = fn;
@@ -117,6 +118,22 @@ AG.interaction = (() => {
 
     if (dismissed.has(prompt.signature)) return;
 
+    // Auto-avance de confirmaciones consecutivas de inicio de airgeddon:
+    // Si el usuario ya confirmó la primera comprobación del sistema y los
+    // pasos siguientes son confirmaciones normales de arranque sin error dentro
+    // de una ventana de 4.5 segundos, se confirman automáticamente para evitar
+    // tener que pulsar Enter repetidas veces.
+    if (
+      prompt.type === 'enter' &&
+      (prompt.isStartup || prompt.context?.id === 'startup') &&
+      !prompt.isError &&
+      Date.now() - lastStartupCommitTime < 4500
+    ) {
+      lastStartupCommitTime = Date.now();
+      commit(prompt, '', true);
+      return;
+    }
+
     // En modo consola no se abren ventanas simples, pero para selección de redes
     // SIEMPRE se abre la ventana interactiva para elegir la red con un clic.
     if (mode === 'console' && prompt.type !== 'network') {
@@ -210,6 +227,11 @@ AG.interaction = (() => {
   // ── Helpers de cierre + envío ─────────────────────────────────────────────
 
   function commit(prompt, data, closeAfter = true) {
+    if (prompt && (prompt.isStartup || prompt.context?.id === 'startup')) {
+      lastStartupCommitTime = Date.now();
+    } else if (prompt && prompt.type === 'menu') {
+      lastStartupCommitTime = 0;
+    }
     if (prompt && prompt.signature) {
       answered.add(prompt.signature);
       if (answered.size > 50) {

@@ -346,3 +346,53 @@ test('con la salida real de airgeddon resume los 18 avisos de .airgeddonrc', () 
   // Y el texto no se duplica.
   assert.equal(result.desc, result.question);
 });
+
+test('la pantalla de bienvenida inicial de airgeddon se detecta con contexto inicio y mensaje conciso', () => {
+  const result = screen([
+    '********************************** Bienvenid@ **********************************',
+    'Este script se ha hecho sólo con fines educativos. Sed buen@s chic@s!',
+    'Utilízalo solo en tus propias redes!!',
+    '',
+    'Idioma Español del S.O. detectado. Soportado por el script. Se cambió automáticamente',
+    'Versión de bash (5.3.20(1)-release) aceptada. Mínimo requerido versión: 4.2',
+    'Permisos de root correctamente detectados',
+    'Detectando resolución... Detectada!: 1920x1080',
+    'Distros conocidas compatibles con este script:',
+    '"Arch" "Backbox" "BlackArch" "CachyOS" "Debian" "Fedora" "Kali" "Ubuntu"',
+    'Detectando sistema...',
+    'CachyOS Linux',
+    '',
+    'Vamos a chequear si tienes instalado lo que el script requiere',
+    'Pulsa la tecla [Enter] para continuar...',
+    '> ',
+  ]);
+  assert.equal(result.type, 'enter');
+  assert.equal(result.context.id, 'startup');
+  assert.equal(result.context.name, 'Inicio de airgeddon');
+  assert.equal(result.title, 'Comprobación de requisitos');
+  assert.equal(result.question, 'Vamos a chequear si tienes instalado lo que el script requiere.');
+  assert.equal(result.isStartup, true);
+  assert.notEqual(result.title, 'Completado con éxito');
+  assert.notEqual(result.context.name, 'Opciones e idioma');
+});
+
+test('la comprobación de herramientas no arrastra el banner de bienvenida del paso anterior', () => {
+  const result = screen([
+    '********************************** Bienvenid@ **********************************',
+    'Vamos a chequear si tienes instalado lo que el script requiere',
+    'Pulsa la tecla [Enter] para continuar...',
+    '',
+    'Herramientas esenciales: comprobando...',
+    'iw .... Ok    awk .... Ok    airmon-ng .... Ok',
+    '',
+    'Tu distro tiene todas las herramientas esenciales necesarias. El script puede continuar...',
+    'Pulsa la tecla [Enter] para continuar...',
+    '> ',
+  ]);
+  assert.equal(result.type, 'enter');
+  assert.equal(result.context.id, 'startup');
+  assert.equal(result.title, 'Herramientas verificadas');
+  assert.equal(result.question, 'Tu distro tiene todas las herramientas esenciales necesarias. El script puede continuar.');
+  assert.equal(result.isStartup, true);
+  assert.doesNotMatch(result.question, /Bienvenid/);
+});

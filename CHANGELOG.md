@@ -62,6 +62,10 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   muestran completos en lugar de solo su última línea.
 - Los avisos repetidos de variables ausentes en `.airgeddonrc` se resumen en un solo mensaje
   ("airgeddon avisó de 18 variables ausentes...") en lugar de apilar los 18 avisos en el modal.
+- Se restaura `.airgeddonrc` con sus 18 variables de configuración completas, eliminando los avisos en el arranque.
+- Se añade el contexto `startup` (`Inicio de airgeddon`) para que la pantalla de bienvenida y verificación de herramientas no se clasifique erróneamente como "Opciones e idioma" ni "Completado con éxito".
+- El parser aísla cada paso de confirmación ("Pulsa Enter"), evitando que la segunda confirmación de herramientas arrastre el texto y banner del paso previo.
+- **Auto-avance de confirmaciones iniciales**: confirmar el primer paso de comprobación inicial avanza automáticamente los pasos siguientes de verificación sin requerir pulsar Enter repetidamente.
 - El bloque de texto previo al prompt ya no se corta en las líneas vacías, que son las que airgeddon usa para
   separar sus avisos.
 - Se corrige el cierre prematuro del servidor en `airgeddon-gui.sh` provocado por la finalización rápida del proceso lanzador del navegador (como wrappers o instancias existentes).

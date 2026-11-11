@@ -22,7 +22,8 @@ AG.parser = (() => {
     { id: 'wep', re: /ataques?\s+wep|\bwep\b/i, name: 'Ataques WEP', icon: 'shield-off', color: 'green', desc: 'Captura de IVs y cracking WEP' },
     { id: 'enterprise', re: /enterprise|radius/i, name: 'Enterprise', icon: 'building-2', color: 'blue', desc: 'WPA/WPA2 Enterprise y RADIUS' },
     { id: 'wpa3', re: /wpa3|dragonfly|\bsae\b/i, name: 'WPA3', icon: 'shield-alert', color: 'purple', desc: 'Dragonfly, SAE y downgrade' },
-    { id: 'options', re: /opciones|idioma|language|options/i, name: 'Opciones e idioma', icon: 'languages', color: 'slate', desc: 'Preferencias del script' },
+    { id: 'startup', re: /bienvenid|chequear\s+si\s+tienes|herramientas\s+(?:esenciales|opcionales)|distro\s+tiene\s+todas|comprobar\s+si\s+existe\s+una\s+nueva\s+versi[oó]n|comprobando\s+acceso\s+a\s+internet/i, name: 'Inicio de airgeddon', icon: 'sparkles', color: 'teal', desc: 'Comprobaciones iniciales del sistema' },
+    { id: 'options', re: /men[uú].*(?:opciones|language|idioma)|^\s*opciones\s+e\s+idioma/i, name: 'Opciones e idioma', icon: 'languages', color: 'slate', desc: 'Preferencias del script' },
     { id: 'scanning', re: /explorar|exploring|buscando\s+objetivos|scanning/i, name: 'Explorando objetivos', icon: 'radar', color: 'teal', desc: 'Buscando redes cercanas' },
     { id: 'target', re: /seleccionar\s+objetivo|select.*target|red\s+objetivo/i, name: 'Selección de objetivo', icon: 'crosshair', color: 'teal', desc: 'Elige la red objetivo' },
     { id: 'attack', re: /ataque|attack|capturando|capturing/i, name: 'Ataque en curso', icon: 'zap', color: 'red', desc: 'Ataque o captura en ejecución' },
@@ -99,7 +100,9 @@ AG.parser = (() => {
       if (!cleaned || SEPARATOR_RE.test(cleaned) || /^\s*\d{1,2}[.)]\s/.test(cleaned)) continue;
       const banner = cleaned.match(/\*{3,}\s*(.+?)\s*\*{3,}/);
       if (banner && banner[1].trim()) {
-        return banner[1].trim().slice(0, 180);
+        const text = banner[1].trim().slice(0, 180);
+        if (/bienvenid/i.test(text)) return 'Inicio de airgeddon';
+        return text;
       }
     }
     // 2. Si no hay banner con asteriscos, buscamos líneas no numeradas con palabras clave de títulos
@@ -108,7 +111,10 @@ AG.parser = (() => {
       if (!raw.trim()) continue;
       const cleaned = cleanLine(raw);
       if (!cleaned || SEPARATOR_RE.test(cleaned) || /^\s*\d{1,2}[.)]\s/.test(cleaned)) continue;
-      if (/men[uú]|airgeddon|ataque|evil\s*twin|desautentic|explorar|seleccionar\s+objetivo|exploring|targets|opciones|language/i.test(cleaned)) {
+      if (/herramientas\s+esenciales/i.test(cleaned)) return 'Comprobación de herramientas';
+      if (/chequear\s+si\s+tienes/i.test(cleaned)) return 'Comprobación de requisitos';
+      if (/última\s+versión|comprobar.*internet/i.test(cleaned)) return 'Comprobación de actualizaciones';
+      if (/men[uú]|airgeddon|ataque|evil\s*twin|desautentic|explorar|seleccionar\s+objetivo|exploring|targets|men[uú].*opciones/i.test(cleaned)) {
         return cleaned.replace(/\*+/g, '').trim().slice(0, 180);
       }
     }
@@ -119,7 +125,7 @@ AG.parser = (() => {
       if (!raw.trim()) continue;
       const cleaned = cleanLine(raw);
       if (!cleaned || SEPARATOR_RE.test(cleaned) || /^\s*\d{1,2}[.)]\s/.test(cleaned)) continue;
-      if (/men[uú]|airgeddon|ataque|evil|desautentic|explorar|targets|opciones|language/i.test(cleaned)) {
+      if (/men[uú]|airgeddon|ataque|evil|desautentic|explorar|targets|men[uú].*opciones/i.test(cleaned)) {
         return cleaned.replace(/\*+/g, '').trim().slice(0, 180);
       }
     }
@@ -517,16 +523,24 @@ AG.parser = (() => {
           if (block.length) break;
           continue;
         }
-        if (/^>\s*$/.test(line) || /^pulsa/i.test(line) || /^continuar/i.test(line)) continue;
+        if (/^>\s*$/.test(line)) continue;
+        // Si encontramos un "Pulsa Enter" anterior y ya acumulamos líneas en el bloque,
+        // este separaba el paso anterior: detenerse para no concatenar pasos previos.
+        if (/pulsa.*(enter|intro)|press.*enter/i.test(line)) {
+          if (block.length) break;
+          continue;
+        }
+        if (/^continuar/i.test(line)) continue;
         block.unshift(line);
       }
+
+      // Detectar si estamos en la secuencia inicial de comprobaciones de airgeddon
+      const isStartup = context.id === 'startup'
+        || /bienvenid|vamos\s+a\s+chequear|herramientas\s+esenciales|distro\s+tiene\s+todas|última\s+versión|comprobando\s+acceso\s+a\s+internet/i.test(block.join(' '));
 
       // Si el bloque contiene avisos de variables ausentes, se recorta para
       // que empiece en el primer aviso: las líneas anteriores pertenecen a
       // otra sección (por ejemplo, el menú previo).
-      // El aviso puede ocupar varias líneas: "Atención. Por favor revisa el
-      // fichero ..." y "... No se ha encontrado la variable X ...". Se busca el
-      // inicio del primer aviso completo.
       let firstAviso = block.findIndex((l) => AVISO_VAR_RE.test(l));
       if (firstAviso >= 0) {
         // Retrocede hasta el comienzo del aviso (la línea "Atención...").
@@ -552,6 +566,19 @@ AG.parser = (() => {
         if (rcPath) {
           precedingMessage += ` Fichero: ${rcPath}`;
         }
+      } else if (isStartup) {
+        // En la secuencia de arranque de airgeddon, extraer únicamente la frase
+        // relevante del paso actual en vez de arrastrar el banner entero o las tablas de distros.
+        const fullText = block.join(' ');
+        if (/vamos\s+a\s+chequear|chequear\s+si\s+tienes/i.test(fullText)) {
+          precedingMessage = 'Vamos a chequear si tienes instalado lo que el script requiere.';
+        } else if (/distro\s+tiene\s+todas|herramientas\s+esenciales/i.test(fullText)) {
+          precedingMessage = 'Tu distro tiene todas las herramientas esenciales necesarias. El script puede continuar.';
+        } else if (/última\s+versión/i.test(fullText)) {
+          precedingMessage = 'El script ya está en la última versión. No necesita ser actualizado.';
+        } else {
+          precedingMessage = block.slice(-2).join(' ').trim() || 'Comprobación inicial de airgeddon.';
+        }
       } else {
         // Se conserva el bloque tal cual, pero se limita su longitud para que
         // el modal no se llene de texto.
@@ -574,7 +601,25 @@ AG.parser = (() => {
       let color = context.color || 'teal';
       let icon = 'corner-down-left';
 
-      if (/no es una tarjeta wifi|no soporta modo monitor|not a wifi|no support.*monitor/i.test(precedingMessage)) {
+      if (isStartup) {
+        color = 'teal';
+        icon = 'sparkles';
+        buttonText = 'Continuar';
+        if (/vamos\s+a\s+chequear|chequear\s+si\s+tienes/i.test(precedingMessage)) {
+          title = 'Comprobación de requisitos';
+          desc = 'airgeddon verificará las dependencias instaladas.';
+        } else if (/herramientas\s+esenciales|distro\s+tiene/i.test(precedingMessage)) {
+          title = 'Herramientas verificadas';
+          desc = 'Todas las dependencias esenciales están listas.';
+        } else if (/última\s+versión/i.test(precedingMessage)) {
+          title = 'Actualización comprobada';
+          desc = 'El script está en la última versión.';
+        } else {
+          title = 'Inicio de airgeddon';
+          desc = 'Comprobaciones iniciales del sistema.';
+        }
+        isDefaultDesc = false;
+      } else if (/no es una tarjeta wifi|no soporta modo monitor|not a wifi|no support.*monitor/i.test(precedingMessage)) {
         isError = true;
         color = 'red';
         icon = 'shield-alert';
@@ -636,6 +681,7 @@ AG.parser = (() => {
         isWarning,
         isSuccess,
         isDefaultDesc,
+        isStartup: Boolean(isStartup),
         color,
         icon,
         signature: buildSignature('enter', context, `${enterQuestion}|${precedingMessage}`),

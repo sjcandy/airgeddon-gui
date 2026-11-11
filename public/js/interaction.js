@@ -166,7 +166,10 @@ AG.interaction = (() => {
     const handle = modal({
       size,
       title: prompt.title || ctx.name,
-      subtitle: prompt.desc || '',
+      // El subtítulo solo se muestra cuando aporta algo que el cuerpo no
+      // muestra: el cuerpo ya pinta `question` y `desc` cuando difieren.
+      // Así el texto nunca aparece duplicado en el modal.
+      subtitle: (prompt.isDefaultDesc || prompt.desc === prompt.question) ? '' : (prompt.desc || ''),
       icon: iconName,
       color,
       kicker,
@@ -755,6 +758,11 @@ AG.interaction = (() => {
   function mountEnter(handle, prompt) {
     const color = prompt.color || (prompt.isError ? 'red' : (prompt.isWarning ? 'amber' : 'teal'));
     const btnClass = prompt.isError ? 'btn-danger' : (prompt.isWarning ? 'btn-warning' : 'btn-accent');
+    // El `desc` ya se muestra como subtítulo en la cabecera del modal
+    // (ver open()). Aquí solo se pinta si aporta información adicional.
+    const extraDesc = prompt.desc && prompt.desc !== prompt.question && !prompt.isDefaultDesc
+      ? `<p style="margin-top:6px;font-size:12.5px;color:var(--tx-2);line-height:1.5">${esc(prompt.desc)}</p>`
+      : '';
 
     handle.body.innerHTML = `
       <div class="confirm-box" style="border-color:var(--${color}-soft);background:var(--${color}-soft)">
@@ -765,7 +773,7 @@ AG.interaction = (() => {
           <p class="confirm-question" style="color:var(--tx-1);font-weight:700;font-size:14px;line-height:1.4">
             ${esc(prompt.question || 'Pulsa Enter para continuar.')}
           </p>
-          ${prompt.desc && prompt.desc !== prompt.question ? `<p style="margin-top:6px;font-size:12.5px;color:var(--tx-2);line-height:1.5">${esc(prompt.desc)}</p>` : ''}
+          ${extraDesc}
           ${prompt.suggestion ? `
             <div style="margin-top:10px;padding:8px 12px;background:var(--bg-1);border:1px solid var(--border);border-radius:8px;font-size:12px;color:var(--tx-2);display:flex;align-items:center;gap:8px">
               ${icon('info')} <span>${esc(prompt.suggestion)}</span>

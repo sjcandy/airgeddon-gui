@@ -237,3 +237,36 @@ test('detecta modo no-wifi en cabecera de menú principal y adapta descripciones
   const opt2 = result.items.find((it) => it.key === '2');
   assert.match(opt2.desc, /No compatible/);
 });
+
+test('el aviso multilínea de .airgeddonrc se muestra completo y sin duplicar', () => {
+  const result = screen([
+    ' Opciones e idioma',
+    ' Continuar',
+    '',
+    ' Atención. Por favor revisa el fichero /home/usuario/airgeddon/.airgeddonrc.',
+    ' No se ha encontrado la variable AIRGEDDON_WINDOWS_HANDLING.',
+    ' El valor por defecto xterm será usado',
+    '',
+    ' Pulsa la tecla [Enter] para continuar...',
+    '> ',
+  ]);
+  assert.equal(result.type, 'enter');
+  // El aviso completo debe aparecer, no solo su última línea.
+  assert.match(result.desc, /Atención\. Por favor revisa el fichero/);
+  assert.match(result.desc, /AIRGEDDON_WINDOWS_HANDLING/);
+  assert.match(result.desc, /valor por defecto xterm/);
+  // El texto no debe repetirse dentro del mismo prompt.
+  assert.equal(result.desc, result.question);
+  // Y debe marcarse como texto propio para que la interfaz no lo duplique.
+  assert.equal(result.isDefaultDesc, false);
+});
+
+test('sin mensaje previo usa el texto genérico y lo marca como tal', () => {
+  const result = screen([
+    ' Pulsa la tecla [Enter] para continuar...',
+    '> ',
+  ]);
+  assert.equal(result.type, 'enter');
+  assert.equal(result.isDefaultDesc, true);
+  assert.match(result.desc, /esperando tu confirmación/);
+});

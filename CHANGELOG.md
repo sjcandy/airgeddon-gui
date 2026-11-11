@@ -56,6 +56,10 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - Se corrigen las tildes ausentes en los mensajes de la interfaz ("Seleccion copiada", "La sesion termino con
   codigo").
 - Se elimina `i18n.js`: el diccionario no lo usaba ninguna parte de la aplicación.
+- El modal de "Continuar" ya no repite el mensaje: el texto se mostraba dos veces, como subtítulo de la cabecera y
+  otra vez dentro del cuerpo.
+- Los avisos multilínea de airgeddon (por ejemplo, la advertencia de una variable ausente en `.airgeddonrc`) se
+  muestran completos en lugar de solo su última línea.
 
 ### Security
 - La contraseña de `sudo` solo reside en la memoria RAM del proceso, se enmascara en la salida y se invalida con

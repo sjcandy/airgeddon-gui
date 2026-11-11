@@ -498,13 +498,30 @@ AG.parser = (() => {
       const context = detectContext(detectTitle(lines, lastIdx), lines, items);
       const enterQuestion = cleanLine(last2);
 
-      // Buscar mensaje previo explicativo
-      let precedingMessage = '';
+      // Buscar el mensaje previo explicativo. Los avisos de airgeddon suelen
+      // ocupar varias líneas (por ejemplo, la advertencia de una variable
+      // ausente en .airgeddonrc), así que se recoge el bloque completo de
+      // líneas consecutivas en lugar de solo la última.
+      const skipLine = (line) =>
+        !line || SEPARATOR_RE.test(line) || /^>\s*$/.test(line) ||
+        /^pulsa/i.test(line) || /^continuar/i.test(line);
+
+      const block = [];
       for (let i = lastIdx - 1; i >= Math.max(0, lastIdx - 8); i--) {
         const line = cleanLine(String(lines[i] || ''));
-        if (!line || SEPARATOR_RE.test(line) || /^>\s*$/.test(line) || /^pulsa/i.test(line) || /^\s*$/.test(line)) continue;
-        precedingMessage = line;
-        break;
+        if (skipLine(line)) {
+          // Un separador corta el bloque: lo que hay por encima pertenece a
+          // otra sección (por ejemplo, el menú anterior).
+          if (SEPARATOR_RE.test(line) && block.length) break;
+          continue;
+        }
+        block.unshift(line);
+      }
+      // Se conserva el bloque tal cual, pero se limita su longitud para que el
+      // modal no se llene de texto.
+      let precedingMessage = block.join(' ').trim();
+      if (precedingMessage.length > 400) {
+        precedingMessage = precedingMessage.slice(0, 400).trimEnd() + '…';
       }
 
       let isError = false;
@@ -512,6 +529,9 @@ AG.parser = (() => {
       let isSuccess = false;
       let title = 'Continuar';
       let desc = 'airgeddon está esperando tu confirmación.';
+      // Marca que `desc` es el texto genérico por defecto, para que la interfaz
+      // no lo repita (ya aparece como subtítulo en la cabecera del modal).
+      let isDefaultDesc = true;
       let suggestion = '';
       let buttonText = 'Continuar';
       let color = context.color || 'teal';
@@ -556,17 +576,29 @@ AG.parser = (() => {
         buttonText = 'Continuar';
       }
 
+      // Si el mensaje previo aporta un texto propio (por ejemplo el aviso de
+      // una variable ausente en .airgeddonrc), ese texto pasa a ser el
+      // subtítulo informative y deja de ser el mensaje genérico.
+      if (precedingMessage && precedingMessage !== desc) {
+        desc = precedingMessage;
+        isDefaultDesc = false;
+      }
+
       return {
         type: 'enter',
         context,
         title,
         desc,
-        question: precedingMessage || cleanLine(last),
+        // Si no hay mensaje previo, la pregunta es el propio aviso de
+        // "Pulsa Enter" en lugar del prompt "> " de la terminal.
+        question: precedingMessage
+          || (enterQuestion.replace(/>\s*$/, '').trim() || 'Pulsa la tecla [Enter] para continuar...'),
         suggestion,
         buttonText,
         isError,
         isWarning,
         isSuccess,
+        isDefaultDesc,
         color,
         icon,
         signature: buildSignature('enter', context, `${enterQuestion}|${precedingMessage}`),

@@ -96,6 +96,17 @@ try {
 } catch {}
 app.use(express.json({ limit: '256kb' }));
 
+const ALLOWED_HOSTS = new Set([
+  `${HOST}:${PORT}`,
+  `127.0.0.1:${PORT}`,
+  `localhost:${PORT}`,
+  `[::1]:${PORT}`,
+  HOST,
+  '127.0.0.1',
+  'localhost',
+  '[::1]',
+]);
+
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
@@ -106,6 +117,16 @@ app.use((req, res, next) => {
     "img-src 'self' data:; font-src 'self' data:; connect-src 'self' ws: wss:; " +
     "object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
   );
+  next();
+});
+
+// Protección contra DNS Rebinding en todos los métodos HTTP
+app.use((req, res, next) => {
+  const host = typeof req.get === 'function' ? req.get('host') : req.headers.host;
+  if (host && !ALLOWED_HOSTS.has(host)) {
+    logSystem('warn', `Host bloqueado (posible DNS Rebinding): ${host}`);
+    return res.status(400).json({ error: 'Host no permitido', code: 'BAD_HOST' });
+  }
   next();
 });
 
@@ -748,6 +769,8 @@ async function stopScan({ silent = false } = {}) {
     try { scan.proc.kill('SIGINT'); } catch {}
     const proc = scan.proc;
     setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 1800);
+    // Asegurar que airodump-ng ejecutado bajo sudo se detenga y no quede como proceso huérfano
+    try { await sudoExec(['pkill', '-2', 'airodump-ng'], { timeout: 2000 }); } catch {}
   }
   scan.proc = null;
   scan.running = false;
@@ -964,6 +987,11 @@ function listCaptures() {
       if (!entry.isFile()) continue;
       const ext = path.extname(entry.name).toLowerCase();
       if (!extensions.has(ext)) continue;
+      // En carpetas del usuario (Escritorio), solo incluir archivos que realmente sean
+      // capturas o logs de auditoría, evitando exponer notas o documentos de texto personales
+      if ((ext === '.txt' || ext === '.log') && dir !== AIRGEDDON_DIR) {
+        if (!/airgeddon|handshake|pmkid|capture|dump|scan/i.test(entry.name)) continue;
+      }
       if (seen.has(full)) continue;
       seen.add(full);
       try {

@@ -1,7 +1,7 @@
 MIT License
 
 Copyright (c) 2026 airgeddon-gui contributors
-Copyright (c) 2026 sjcandy (sjcandy)
+Copyright (c) 2026 sjcandy
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -20,17 +20,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-Este proyecto (airgeddon-gui) es software independiente bajo licencia MIT.
-
-airgeddon-gui NO incluye el código de airgeddon. Es un.front-end independiente
-que interactúa con una instalación local de airgeddon.
-
-airgeddon es obra de v1s1t0r1sh3r3 y se distribuye bajo la licencia GPLv3:
-    https://github.com/v1s1t0r1sh3r3/airgeddon
-
-Los logotipos y recursos gráficos de airgeddon incluidos en public/img/ son
-propiedad de sus autores y se utilizan bajo los términos de la licencia GPLv3
-del proyecto original. Consulta NOTICE para los detalles de atribución.

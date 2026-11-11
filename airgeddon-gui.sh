@@ -54,8 +54,7 @@ fi
 # 3. Comprobar e instalar dependencias (node_modules)
 if [ ! -d "node_modules" ]; then
     echo -e "${YELLOW}[*] Primera ejecución detectada: Instalando dependencias con npm...${NC}"
-    npm install
-    if [ $? -ne 0 ]; then
+    if ! npm install; then
         echo -e "${RED}[✗] Falló la instalación de dependencias.${NC}"
         echo -e "    Si falló node-pty, instala las herramientas de compilación:"
         echo -e "    ${YELLOW}sudo apt install -y build-essential python3 make g++ libssl-dev${NC}"
@@ -67,7 +66,8 @@ fi
 # 4. Localizar airgeddon
 if [ -z "$AIRGEDDON_DIR" ]; then
     if [ -f "$SCRIPT_DIR/../airgeddon/airgeddon.sh" ]; then
-        export AIRGEDDON_DIR="$(cd "$SCRIPT_DIR/../airgeddon" && pwd)"
+        AIRGEDDON_DIR="$(cd "$SCRIPT_DIR/../airgeddon" && pwd)"
+        export AIRGEDDON_DIR
     elif [ -f "/usr/share/airgeddon/airgeddon.sh" ]; then
         export AIRGEDDON_DIR="/usr/share/airgeddon"
     elif [ -f "$SCRIPT_DIR/airgeddon/airgeddon.sh" ]; then
@@ -79,11 +79,12 @@ fi
 
 if [ -z "$AIRGEDDON_DIR" ] || [ ! -f "$AIRGEDDON_DIR/airgeddon.sh" ]; then
     echo -e "${YELLOW}[!] No se encontró airgeddon instalado en rutas habituales.${NC}"
-    read -p "    ¿Deseas clonar airgeddon automáticamente en la carpeta superior? (s/n): " RESP
+    read -r -p "    ¿Deseas clonar airgeddon automáticamente en la carpeta superior? (s/n): " RESP
     if [[ "$RESP" =~ ^[sSyY]$ ]]; then
         echo -e "${BLUE}[*] Clonando airgeddon desde GitHub...${NC}"
         git clone https://github.com/v1s1t0r1sh3r3/airgeddon.git "$SCRIPT_DIR/../airgeddon"
-        export AIRGEDDON_DIR="$(cd "$SCRIPT_DIR/../airgeddon" && pwd)"
+        AIRGEDDON_DIR="$(cd "$SCRIPT_DIR/../airgeddon" && pwd)"
+        export AIRGEDDON_DIR
         echo -e "${GREEN}[✓] airgeddon clonado en $AIRGEDDON_DIR${NC}\n"
     else
         echo -e "${YELLOW}[!] Puedes indicar la ruta manualmente antes de ejecutar:${NC}"
@@ -95,19 +96,19 @@ fi
 
 # 5. Comprobar si el puerto ya está en uso
 if command -v lsof &> /dev/null; then
-    PORT_BUSY=$(lsof -i :$PORT -t 2>/dev/null || true)
+    PORT_BUSY=$(lsof -i ":$PORT" -t 2>/dev/null || true)
 elif command -v fuser &> /dev/null; then
-    PORT_BUSY=$(fuser $PORT/tcp 2>/dev/null || true)
+    PORT_BUSY=$(fuser "$PORT/tcp" 2>/dev/null || true)
 fi
 
 if [ -n "$PORT_BUSY" ]; then
     echo -e "${YELLOW}[!] El puerto $PORT ya está en uso por el proceso $PORT_BUSY.${NC}"
-    read -p "    ¿Deseas cerrar el proceso anterior y continuar? (s/n): " KILL_RESP
+    read -r -p "    ¿Deseas cerrar el proceso anterior y continuar? (s/n): " KILL_RESP
     if [[ "$KILL_RESP" =~ ^[sSyY]$ ]]; then
         if command -v fuser &> /dev/null; then
-            fuser -k $PORT/tcp &> /dev/null || true
+            fuser -k "$PORT/tcp" &> /dev/null || true
         else
-            kill -9 $PORT_BUSY &> /dev/null || true
+            kill -9 "$PORT_BUSY" &> /dev/null || true
         fi
         sleep 1
     else
@@ -145,16 +146,13 @@ if [ "$ALREADY_RUNNING" -eq 0 ]; then
     SERVER_PID=$!
 
     # Esperar a que el servidor esté listo
-    READY=0
-    for i in {1..20}; do
+    for _ in $(seq 1 20); do
         if command -v curl &> /dev/null; then
             if curl -s "http://${HOST}:${PORT}/api/health" &> /dev/null; then
-                READY=1
                 break
             fi
         else
             sleep 0.5
-            READY=1
             break
         fi
         sleep 0.3

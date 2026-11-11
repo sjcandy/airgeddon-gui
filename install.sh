@@ -48,7 +48,7 @@ echo -e "${BLUE}[*] Comprobando dependencias del sistema...${NC}"
 # 2. Comprobar Node.js
 if ! command -v node &> /dev/null; then
     echo -e "${YELLOW}[!] Node.js no está instalado.${NC}"
-    read -p "    ¿Deseas instalar Node.js y npm automáticamente ahora? (s/n): " INSTALL_NODE
+    read -r -p "    ¿Deseas instalar Node.js y npm automáticamente ahora? (s/n): " INSTALL_NODE
     if [[ "$INSTALL_NODE" =~ ^[sSyY]$ ]]; then
         if [ "$PKG_MANAGER" = "pacman" ]; then
             sudo pacman -S --needed nodejs npm
@@ -75,7 +75,7 @@ echo -e "${GREEN}[✓] Node.js detectado:${NC} $(node -v)"
 if [ "$NODE_VER" -lt 18 ]; then
     echo -e "${YELLOW}[!] Advertencia: Tu versión de Node.js ($(node -v)) es inferior a la v18 recomendada.${NC}"
     if [ "$PKG_MANAGER" = "apt" ]; then
-        read -p "    ¿Deseas actualizar a Node.js 20 LTS vía NodeSource? (s/n): " UP_NODE
+        read -r -p "    ¿Deseas actualizar a Node.js 20 LTS vía NodeSource? (s/n): " UP_NODE
         if [[ "$UP_NODE" =~ ^[sSyY]$ ]]; then
             curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
             sudo apt install -y nodejs
@@ -108,18 +108,19 @@ fi
 
 if [ -n "$AIRGEDDON_FOUND" ]; then
     echo -e "${GREEN}[✓] Se detectó una instalación previa de airgeddon en:${NC} $AIRGEDDON_FOUND"
-    read -p "    ¿Deseas usar esta instalación? (S/n): " USE_DETECTED
+    read -r -p "    ¿Deseas usar esta instalación? (S/n): " USE_DETECTED
     if [[ ! "$USE_DETECTED" =~ ^[nN]$ ]]; then
         export AIRGEDDON_DIR="$AIRGEDDON_FOUND"
     fi
 fi
 
 if [ -z "$AIRGEDDON_DIR" ]; then
-    read -p "    ¿Ya tienes airgeddon instalado en otra ruta de tu equipo? (s/N): " HAS_AIRGEDDON
+    read -r -p "    ¿Ya tienes airgeddon instalado en otra ruta de tu equipo? (s/N): " HAS_AIRGEDDON
     if [[ "$HAS_AIRGEDDON" =~ ^[sSyY]$ ]]; then
-        read -p "    Introduce la ruta a la carpeta de airgeddon (ej: /home/usuario/airgeddon): " CUSTOM_DIR
+        read -r -p "    Introduce la ruta a la carpeta de airgeddon (ej: /home/usuario/airgeddon): " CUSTOM_DIR
         if [ -f "$CUSTOM_DIR/airgeddon.sh" ]; then
-            export AIRGEDDON_DIR="$(cd "$CUSTOM_DIR" && pwd)"
+            AIRGEDDON_DIR="$(cd "$CUSTOM_DIR" && pwd)"
+            export AIRGEDDON_DIR
             echo -e "${GREEN}[✓] Ruta de airgeddon confirmada:${NC} $AIRGEDDON_DIR"
         else
             echo -e "${YELLOW}[!] No se encontró airgeddon.sh en esa ruta.${NC}"
@@ -135,7 +136,8 @@ if [ -z "$AIRGEDDON_DIR" ]; then
     if [ ! -d "$TARGET_CLONE" ]; then
         git clone https://github.com/v1s1t0r1sh3r3/airgeddon.git "$TARGET_CLONE"
     fi
-    export AIRGEDDON_DIR="$(cd "$TARGET_CLONE" && pwd)"
+    AIRGEDDON_DIR="$(cd "$TARGET_CLONE" && pwd)"
+    export AIRGEDDON_DIR
     echo -e "${GREEN}[✓] airgeddon clonado y listo en:${NC} $AIRGEDDON_DIR"
 fi
 
@@ -156,14 +158,15 @@ fi
 
 if [ ${#MISSING_TOOLS[@]} -gt 0 ]; then
     echo -e "${YELLOW}[!] Las siguientes herramientas recomendadas no están instaladas: ${MISSING_TOOLS[*]}${NC}"
-    read -p "    ¿Deseas instalarlas ahora con tu gestor de paquetes ($PKG_MANAGER)? (s/n): " INSTALL_TOOLS
+    read -r -p "    ¿Deseas instalarlas ahora con tu gestor de paquetes ($PKG_MANAGER)? (s/n): " INSTALL_TOOLS
     if [[ "$INSTALL_TOOLS" =~ ^[sSyY]$ ]]; then
         if [ "$PKG_MANAGER" = "pacman" ]; then
-            sudo pacman -S --needed "${MISSING_TOOLS[@]}" ccze python-pillow 2>/dev/null || sudo pacman -S --needed "${MISSING_TOOLS[@]}"
+            sudo pacman -S --needed "${MISSING_TOOLS[@]}" ccze python-pillow || sudo pacman -S --needed "${MISSING_TOOLS[@]}"
         elif [ "$PKG_MANAGER" = "apt" ]; then
-            sudo apt update && sudo apt install -y "${MISSING_TOOLS[@]}" ccze python3-pil 2>/dev/null || sudo apt install -y "${MISSING_TOOLS[@]}"
+            sudo apt update
+            sudo apt install -y "${MISSING_TOOLS[@]}" ccze python3-pil || sudo apt install -y "${MISSING_TOOLS[@]}"
         elif [ "$PKG_MANAGER" = "dnf" ]; then
-            sudo dnf install -y "${MISSING_TOOLS[@]}" ccze python3-pillow 2>/dev/null || sudo dnf install -y "${MISSING_TOOLS[@]}"
+            sudo dnf install -y "${MISSING_TOOLS[@]}" ccze python3-pillow || sudo dnf install -y "${MISSING_TOOLS[@]}"
         fi
     else
         echo -e "${YELLOW}[!] Recuerda que airgeddon requiere aircrack-ng y xterm para ciertas auditorías.${NC}"

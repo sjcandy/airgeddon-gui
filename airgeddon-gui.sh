@@ -35,11 +35,16 @@ while [ "$#" -gt 0 ]; do
             echo ""
             echo "Opciones:"
             echo "  -h, --help           Muestra esta ayuda y sale"
+            echo "  -a, --app            Abre la interfaz en ventana de escritorio nativa (por defecto)"
             echo "  -b, --browser        Abre la interfaz en el navegador web estándar"
             echo "  -s, --server-only    Inicia solo el servidor web (modo sin ventana)"
             echo "  -p, --port PUERTO    Puerto del servidor (por defecto: 3845)"
             echo "  --host HOST          Host del servidor (por defecto: 127.0.0.1)"
             exit 0
+            ;;
+        -a|--app)
+            USE_BROWSER_MODE=0
+            shift
             ;;
         -b|--browser)
             USE_BROWSER_MODE=1
@@ -56,6 +61,10 @@ while [ "$#" -gt 0 ]; do
         --host)
             HOST="$2"
             shift 2
+            ;;
+        %*|http://*|https://*)
+            # Parámetros pasados por entornos de escritorio freedesktop (%u, %U, URLs)
+            shift
             ;;
         *)
             echo -e "${RED}[✗] Opción no reconocida: $1${NC}"

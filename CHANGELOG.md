@@ -47,6 +47,15 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - Validación de contraseña `sudo` caducada y carreras de arranque/cierre de `airodump-ng`.
 - Bucle infinito de confirmación con `Enter` durante el escaneo de redes.
 - La ruta del directorio de escritorio ya no está hardcodeada a `Escritorio`: se resuelve con `xdg-user-dir`.
+- El paquete de Arch ahora compila e instala `node_modules`, incluye `install-desktop.sh` y declara `iproute2`;
+  antes el paquete instalado no arrancaba por falta de `node-pty`.
+- El paquete `.deb` compila las dependencias en el momento de la compilación en lugar de descargarlas durante la
+  instalación, y añade un `prerm` que detiene la aplicación antes de desinstalar.
+- El workflow de releases construye el paquete `.deb` antes de publicarlo; antes la release salía sin adjuntos.
+- Se eliminan las definiciones duplicadas de `maximize()`, `isMaximized()` y `copySelection()` en la terminal.
+- Se corrigen las tildes ausentes en los mensajes de la interfaz ("Seleccion copiada", "La sesion termino con
+  codigo").
+- Se elimina `i18n.js`: el diccionario no lo usaba ninguna parte de la aplicación.
 
 ### Security
 - La contraseña de `sudo` solo reside en la memoria RAM del proceso, se enmascara en la salida y se invalida con
@@ -55,6 +64,9 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - Los nombres de interfaz se validan contra `^[a-zA-Z0-9_.:-]+$` antes de usarse en comandos.
 - El servidor hace bind exclusivo a `127.0.0.1`.
 - Se desactivan el autoguardado de contraseñas y los avisos de notificaciones del navegador en modo aplicación.
+- **Protección CSRF**: las peticiones que modifican el estado se rechazan cuando el encabezado `Origin` no
+  corresponde al propio servidor, de modo que una página web ajena no puede invocar la API local.
+- Las credenciales de la URL del remoto de git se ocultan antes de mostrarse en la interfaz de actualizaciones.
 
 ## [1.0.0] - 2026-11-09
 

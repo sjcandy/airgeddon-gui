@@ -123,6 +123,11 @@ Además, el asistente **detecta y explica errores** antes de que se produzcan: s
 - Se aplica una **Content-Security-Policy** estricta (`script-src 'self'`, `object-src 'none'`,
   `frame-ancestors 'none'`).
 - La contraseña se enmascara (`••••••`) en toda la salida de la terminal y en el registro del sistema.
+- **Protección CSRF**: las peticiones que modifican el estado (autenticación sudo, escritura de `.airgeddonrc`,
+  gestión de interfaces, actualizaciones) se rechazan si el encabezado `Origin` no corresponde al propio servidor.
+  Así, una página web ajena no puede controlar la aplicación aunque esté abierta en el navegador.
+- Las credenciales que pueda contener la URL del remoto de git se ocultan (`••••••`) antes de mostrarse en la
+  interfaz de actualizaciones.
 
 ### 🔄 Actualizaciones integradas
 
@@ -371,9 +376,14 @@ npm install --production
 
 ```bash
 npm install       # dependencias
-npm start         # servidor en http://127.0.0.1:3845
 npm test          # tests unitarios (node:test)
 npm run lint      # comprobación sintáctica de server.js y public/js/*.js
+```
+
+Para levantar la aplicación en modo escritorio durante el desarrollo:
+
+```bash
+./airgeddon-gui.sh
 ```
 
 Contribuciones bienvenidas: fork, rama, `npm test` + `npm run lint`, commit y Pull Request.

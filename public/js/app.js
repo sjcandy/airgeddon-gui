@@ -332,7 +332,7 @@ AG.app = (() => {
         setPrompt(null);
         updateSessionUI();
         addEvent(msg.code === 0 ? 'success' : 'warn', 'Sesión de airgeddon finalizada', `Código de salida: ${msg.code}`);
-        AG.ui.notify('airgeddon finalizado', 'La sesion termino con codigo ' + msg.code + '.');
+        AG.ui.notify('airgeddon finalizado', 'La sesión terminó con código ' + msg.code + '.');
         toast(msg.code === 0 ? 'airgeddon terminó correctamente' : `airgeddon terminó con código ${msg.code}`, msg.code === 0 ? 'success' : 'warn');
         break;
 

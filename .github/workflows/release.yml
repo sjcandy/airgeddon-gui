@@ -16,6 +16,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Instalar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Instalar dpkg
+        run: sudo apt-get update && sudo apt-get install -y dpkg-dev
+
+      - name: Construir el paquete .deb
+        run: ./build-deb.sh
+
       - name: Crear release
         uses: softprops/action-gh-release@v2
         with:

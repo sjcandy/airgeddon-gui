@@ -41,6 +41,12 @@ dist/
 build/
 build-deb/
 *.deb
+*.srcpkg
+*.pkg.tar.zst
+
+# Parches y fusionados de git
+*.orig
+*.rej
 
 # airgeddon runtime
 .airgeddonrc.gui-backup

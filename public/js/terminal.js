@@ -327,46 +327,10 @@ AG.terminal = (() => {
     try {
       const sel = term.getSelection();
       if (sel) {
-        navigator.clipboard.writeText(sel).then(function() {
-          if (AG.ui && AG.ui.toast) AG.ui.toast('Seleccion copiada', 'success');
-        }).catch(function() {
-          const ta = document.createElement('textarea');
-          ta.value = sel;
-          document.body.appendChild(ta);
-          ta.select();
-          document.execCommand('copy');
-          ta.remove();
-          if (AG.ui && AG.ui.toast) AG.ui.toast('Seleccion copiada', 'success');
-        });
-      }
-    } catch (e) {}
-  }
-
-  function maximize() {
-    if (!drawer) return;
-    if (maximized) {
-      drawer.classList.remove('maximized');
-      maximized = false;
-    } else {
-      drawer.classList.add('maximized');
-      maximized = true;
-    }
-    setTimeout(fit, 100);
-  }
-
-  function isMaximized() {
-    return maximized;
-  }
-
-  function copySelection() {
-    if (!term) return;
-    try {
-      const sel = term.getSelection();
-      if (sel) {
         navigator.clipboard.writeText(sel).then(() => {
           if (AG.ui && AG.ui.toast) AG.ui.toast('Selección copiada', 'success');
         }).catch(() => {
-          // Fallback
+          // Fallback para navegadores sin permiso de portapapeles
           const ta = document.createElement('textarea');
           ta.value = sel;
           document.body.appendChild(ta);

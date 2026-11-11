@@ -29,10 +29,11 @@
     "v1s1t0r1sh3r3 (airgeddon original) <https://github.com/v1s1t0r1sh3r3>"
   ],
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js",
+    "start": "./airgeddon-gui.sh",
+    "server": "node server.js",
     "test": "node --test",
     "lint": "node --check server.js && for f in public/js/*.js; do node --check \"$f\"; done",
+    "build:deb": "./build-deb.sh",
     "build": "echo 'No build step required - static files served directly'"
   },
   "dependencies": {
@@ -51,5 +52,8 @@
   "engines": {
     "node": ">=18.0.0",
     "npm": ">=9.0.0"
+  },
+  "allowScripts": {
+    "node-pty@1.1.0": true
   }
 }

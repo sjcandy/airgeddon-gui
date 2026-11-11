@@ -56,6 +56,54 @@ app.use((req, res, next) => {
   next();
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Protección CSRF / control de origen
+// ─────────────────────────────────────────────────────────────────────────────
+// El servidor escucha solo en 127.0.0.1, pero cualquier página web abierta en
+// el navegador puede intentar llamar a http://127.0.0.1:3845 desde el origen
+// del atacante. Como la API expone acciones sensibles (autenticación sudo,
+// escribir .airgeddonrc, matar procesos, aplicar actualizaciones), se exige
+// que las peticiones mutadoras envíen un Origin propio.
+//
+// Los navegadores siempre envían Origin en las peticiones CORS y en las
+// peticiones POST/PUT/DELETE. Las peticiones del propio cliente (fetch/XHR
+// desde la app) también lo hacen, porque se sirven desde el mismo origen.
+
+const SELF_ORIGINS = new Set([
+  `http://${HOST}:${PORT}`,
+  `http://localhost:${PORT}`,
+  `http://127.0.0.1:${PORT}`,
+]);
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+/** Comprueba que el Origin de la petición sea el propio servidor. */
+function isTrustedOrigin(req) {
+  const origin = req.get('origin');
+  // Sin Origin: cliente local (curl, apps nativas, modo escritorio).
+  // No es falsificable desde un navegador, así que se acepta.
+  if (!origin) return true;
+  if (SELF_ORIGINS.has(origin)) return true;
+  // Algunos navegadores reportan el origen como "null" en contextos local-file.
+  // Se acepta solo si la petición viene del propio servidor por IP.
+  if (origin === 'null') {
+    const host = req.get('host');
+    return !host || host === `${HOST}:${PORT}`;
+  }
+  return false;
+}
+
+app.use((req, res, next) => {
+  if (SAFE_METHODS.has(req.method)) return next();
+  if (!isTrustedOrigin(req)) {
+    logSystem('error', `Origen bloqueado: ${req.method} ${req.path} (Origin: ${req.get('origin') || 'sin origen'})`);
+    return res.status(403).json({
+      error: 'Origen de la petición no permitido',
+      code: 'BAD_ORIGIN',
+    });
+  }
+  next();
+});
+
 // Dependencias del frontend servidas desde node_modules (sin CDN)
 app.use('/vendor/xterm', express.static(path.join(__dirname, 'node_modules', '@xterm', 'xterm')));
 app.use('/vendor/addon-fit', express.static(path.join(__dirname, 'node_modules', '@xterm', 'addon-fit')));
@@ -259,6 +307,18 @@ function sessionSnapshot() {
 function redact(text) {
   if (!sudoPassword) return text;
   return String(text).split(sudoPassword).join('••••••');
+}
+
+/**
+ * Oculta las credenciales que pueda contener una URL de git.
+ * Los remotos configurados con token suelen tener la forma:
+ *   https://x-access-token:<TOKEN>@github.com/usuario/repo.git
+ *   https://usuario:<TOKEN>@github.com/usuario/repo.git
+ * Esas URLs se exponen al cliente, así que el token debe desaparecer.
+ */
+function redactUrlCredentials(url) {
+  if (!url) return '';
+  return String(url).replace(/(\/\/[^/@\s]+):([^/@\s]+)@/, '$1:••••••@');
 }
 
 async function startSession({ cols = 120, rows = 40 } = {}) {
@@ -1121,7 +1181,7 @@ app.get('/api/system/updates', async (req, res) => {
     if (msg.ok) lastCommitMsg = msg.stdout.trim().split('\n')[0];
 
     const rem = await execFileP('git', ['config', '--get', 'remote.origin.url'], { cwd: __dirname });
-    if (rem.ok) remoteUrl = rem.stdout.trim();
+    if (rem.ok) remoteUrl = redactUrlCredentials(rem.stdout.trim());
 
     if (remoteUrl) {
       await execFileP('git', ['fetch', 'origin'], { cwd: __dirname, timeout: 8000 });

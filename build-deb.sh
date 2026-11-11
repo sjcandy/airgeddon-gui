@@ -24,6 +24,18 @@ fi
 
 echo "[*] Generando paquete .deb para Debian / Kali Linux / Ubuntu..."
 
+# 0. Compilar las dependencias de Node (node-pty es nativa).
+# Se compila aquí para que el paquete instalado no necesite red ni permisos
+# de escritura en /opt durante la instalación.
+if [ ! -d "${SCRIPT_DIR}/node_modules" ] || [ "${SKIP_NPM:-0}" != "1" ]; then
+    echo "[*] Compilando dependencias de Node.js..."
+    (cd "${SCRIPT_DIR}" && npm ci --omit=dev) || {
+        echo "[!] Error: falló 'npm ci'. Revisa que tengas Node.js >= 18 y las"
+        echo "    herramientas de compilación (build-essential, python3)."
+        exit 1
+    }
+fi
+
 rm -rf "$BUILD_ROOT"
 mkdir -p "${PKG_DIR}/DEBIAN"
 mkdir -p "${PKG_DIR}/opt/airgeddon-gui"
@@ -79,6 +91,7 @@ airgeddon-gui (${PKG_VER}) unstable; urgency=medium
 EOF
 
 cp -a "${SCRIPT_DIR}/public" "${PKG_DIR}/opt/airgeddon-gui/"
+cp -a "${SCRIPT_DIR}/node_modules" "${PKG_DIR}/opt/airgeddon-gui/"
 
 # 3. Lanzador global /usr/bin/airgeddon-gui
 cat << 'EOF' > "${PKG_DIR}/usr/bin/airgeddon-gui"
@@ -117,11 +130,8 @@ fi
 cat << 'EOF' > "${PKG_DIR}/DEBIAN/postinst"
 #!/bin/bash
 set -e
-cd /opt/airgeddon-gui
-if [ ! -d "node_modules" ]; then
-    npm install --production 2>/dev/null || true
-fi
 chmod +x /opt/airgeddon-gui/airgeddon-gui.sh
+chmod +x /opt/airgeddon-gui/install-desktop.sh
 chmod +x /usr/bin/airgeddon-gui
 if command -v update-desktop-database &> /dev/null; then
     update-desktop-database /usr/share/applications 2>/dev/null || true
@@ -130,7 +140,16 @@ exit 0
 EOF
 chmod 755 "${PKG_DIR}/DEBIAN/postinst"
 
-# 7. Compilación con dpkg-deb
+# 7. Desinstalación (prerm)
+cat << 'EOF' > "${PKG_DIR}/DEBIAN/prerm"
+#!/bin/bash
+# Detiene la aplicación si estuviera en ejecución antes de desinstalar.
+pkill -f "/opt/airgeddon-gui/server.js" 2>/dev/null || true
+exit 0
+EOF
+chmod 755 "${PKG_DIR}/DEBIAN/prerm"
+
+# 8. Compilación con dpkg-deb
 dpkg-deb --build "$PKG_DIR" "${SCRIPT_DIR}/${PKG_NAME}_${PKG_VER}_${PKG_ARCH}.deb"
 rm -rf "$BUILD_ROOT"
 

@@ -270,13 +270,21 @@ Pulsa **Super / Windows**, escribe `airgeddon` y haz clic en el icono. Se abre c
 ### Desde la terminal
 
 ```bash
+# Modo aplicación de escritorio (por defecto)
 ./airgeddon-gui.sh
+
+# Modo navegador web estándar
+./airgeddon-gui.sh --browser
+
+# Modo servidor exclusivo (sin abrir navegador ni ventana, ideal para headless o SSH)
+./airgeddon-gui.sh --server-only
+
+# Ver todas las opciones disponibles
+./airgeddon-gui.sh --help
 ```
 
 El lanzador comprueba las dependencias, libera el puerto `3845` si está ocupado, arranca el servidor, espera a que
-responda y abre la ventana.
-
-> ⚠️ Necesita una sesión gráfica activa (`DISPLAY` o `WAYLAND_DISPLAY`). No se puede ejecutar en modo headless.
+responda y abre la interfaz de forma adaptativa. Si no se detecta entorno gráfico, cambia automáticamente a modo servidor.
 
 ### Flujo típico
 

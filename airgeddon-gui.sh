@@ -4,9 +4,7 @@
 # ==============================================================================
 # Este script comprueba dependencias (Node.js, npm, airgeddon), instala los
 # paquetes necesarios en la primera ejecución, levanta el servidor y abre la
-# aplicación en una ventana nativa de escritorio.
-#
-# Es exclusivamente una aplicación de escritorio: no dispone de modo navegador.
+# aplicación en una ventana nativa de escritorio o en el navegador.
 # ==============================================================================
 
 set -e
@@ -24,6 +22,48 @@ PORT="${PORT:-3845}"
 HOST="${HOST:-127.0.0.1}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+
+USE_BROWSER_MODE=0
+SERVER_ONLY=0
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -h|--help)
+            echo -e "${CYAN}${BOLD}airgeddon GUI — Interfaz gráfica para airgeddon${NC}"
+            echo ""
+            echo "Uso: ./airgeddon-gui.sh [OPCIONES]"
+            echo ""
+            echo "Opciones:"
+            echo "  -h, --help           Muestra esta ayuda y sale"
+            echo "  -b, --browser        Abre la interfaz en el navegador web estándar"
+            echo "  -s, --server-only    Inicia solo el servidor web (modo sin ventana)"
+            echo "  -p, --port PUERTO    Puerto del servidor (por defecto: 3845)"
+            echo "  --host HOST          Host del servidor (por defecto: 127.0.0.1)"
+            exit 0
+            ;;
+        -b|--browser)
+            USE_BROWSER_MODE=1
+            shift
+            ;;
+        -s|--server-only|--no-browser)
+            SERVER_ONLY=1
+            shift
+            ;;
+        -p|--port)
+            PORT="$2"
+            shift 2
+            ;;
+        --host)
+            HOST="$2"
+            shift 2
+            ;;
+        *)
+            echo -e "${RED}[✗] Opción no reconocida: $1${NC}"
+            echo -e "    Usa ${BOLD}./airgeddon-gui.sh --help${NC} para ver las opciones disponibles."
+            exit 1
+            ;;
+    esac
+done
 
 echo -e "${CYAN}${BOLD}"
 echo "  ╔════════════════════════════════════════════════════════╗"
@@ -96,19 +136,15 @@ else
     echo -e "${GREEN}[✓] airgeddon detectado en:${NC} $AIRGEDDON_DIR"
 fi
 
-# 5. Comprobar que hay una sesión gráfica disponible.
-# airgeddon GUI es exclusivamente una aplicación de escritorio: si no hay
-# servidor gráfico no se puede abrir la ventana, así que se aborta antes de
-# levantar el servidor para no dejar procesos huérfanos.
-if [ -z "$DISPLAY" ] && [ -z "$WAYLAND_DISPLAY" ]; then
-    echo -e "${RED}[✗] No se detectó un servidor gráfico (DISPLAY / WAYLAND_DISPLAY).${NC}"
-    echo -e "    airgeddon GUI es una aplicación de escritorio y necesita una sesión gráfica activa."
-    echo -e "    ${YELLOW}En un servidor sin escritorio, usa SSH con reenvío de X11${NC} o accede a la máquina"
-    echo -e "    ${YELLOW}desde otro equipo con un servidor X remoto configurado.${NC}"
-    exit 1
+# 5. Comprobar sesión gráfica
+if [ "$SERVER_ONLY" -eq 0 ] && [ -z "$DISPLAY" ] && [ -z "$WAYLAND_DISPLAY" ]; then
+    echo -e "${YELLOW}[!] No se detectó un entorno gráfico (DISPLAY / WAYLAND_DISPLAY).${NC}"
+    echo -e "    Iniciando automáticamente en modo servidor (${BOLD}--server-only${NC})."
+    SERVER_ONLY=1
 fi
 
 # 6. Comprobar si el puerto ya está en uso
+PORT_BUSY=""
 if command -v lsof &> /dev/null; then
     PORT_BUSY=$(lsof -i ":$PORT" -t 2>/dev/null || true)
 elif command -v fuser &> /dev/null; then
@@ -155,8 +191,9 @@ cleanup() {
 trap cleanup SIGINT SIGTERM
 
 # 7. Iniciar el servidor Node en segundo plano si no estaba activo
+SERVER_PID=""
 if [ "$ALREADY_RUNNING" -eq 0 ]; then
-    node server.js &
+    PORT="$PORT" HOST="$HOST" node server.js &
     SERVER_PID=$!
 
     # Esperar a que el servidor esté listo
@@ -174,74 +211,100 @@ if [ "$ALREADY_RUNNING" -eq 0 ]; then
     echo -e "${GREEN}${BOLD}[✓] Servidor listo.${NC}"
 fi
 
-# 8. Abrir la ventana de aplicación nativa de escritorio
-# El proyecto es exclusivamente una aplicación de escritorio: no hay modo web.
+# Función auxiliar para comprobar si un navegador es ejecutable
+can_run_browser() {
+    local b="$1"
+    command -v "$b" &> /dev/null || return 1
+    "$b" --version &> /dev/null || return 1
+    return 0
+}
+
+# 8. Abrir interfaz en ventana de escritorio o navegador
 APP_PID=""
-if [ -n "$DISPLAY" ] || [ -n "$WAYLAND_DISPLAY" ]; then
-    # Asegurar integración de escritorio e iconos si no existen
-    if [ ! -f "${HOME}/.local/share/applications/airgeddon-gui.desktop" ] || [ ! -f "${HOME}/.local/share/applications/brave-127.0.0.1__-Default.desktop" ]; then
-        bash "${SCRIPT_DIR}/install-desktop.sh" &> /dev/null || true
-    fi
-
-    # Ventana independiente sin barras de navegador
-    APP_PROFILE="${HOME}/.config/airgeddon-gui/app-profile"
-    mkdir -p "${APP_PROFILE}/Default"
-
-    # Desactivar gestor de contraseñas y avisos emergentes de notificaciones en el perfil
-    node -e '
-      const fs = require("fs");
-      const p = process.argv[1] + "/Default/Preferences";
-      let prefs = {};
-      try { prefs = JSON.parse(fs.readFileSync(p, "utf8")); } catch {}
-      prefs.credentials_enable_service = false;
-      prefs.profile = prefs.profile || {};
-      prefs.profile.password_manager_enabled = false;
-      prefs.profile.default_content_setting_values = prefs.profile.default_content_setting_values || {};
-      prefs.profile.default_content_setting_values.notifications = 2;
-      try { fs.writeFileSync(p, JSON.stringify(prefs, null, 2)); } catch {}
-    ' "$APP_PROFILE" 2>/dev/null || true
-
-    APP_LAUNCHED=0
-    for b in brave brave-browser google-chrome-stable google-chrome chromium chromium-browser microsoft-edge; do
-        if command -v "$b" &> /dev/null; then
-            echo -e "${GREEN}[*] Abriendo ventana nativa de airgeddon GUI (${b})...${NC}"
-            "$b" --app="$URL" \
-                 --class="airgeddon-gui" \
-                 --name="airgeddon-gui" \
-                 --user-data-dir="$APP_PROFILE" \
-                 --window-size=1280,820 \
-                 --disable-save-password-bubble \
-                 --disable-notifications \
-                 --deny-permission-prompts \
-                 --disable-features=PasswordManager,AutofillServerCommunication,Translate,OptimizationHints \
-                 --password-store=basic \
-                 --no-default-browser-check \
-                 --no-first-run \
-                 &> /dev/null &
-            APP_PID=$!
-            APP_LAUNCHED=1
-            break
-        fi
-    done
-
-    if [ "$APP_LAUNCHED" -eq 0 ]; then
-        if command -v firefox &> /dev/null; then
-            echo -e "${YELLOW}[*] Abriendo ventana con Firefox...${NC}"
+if [ "$SERVER_ONLY" -eq 0 ]; then
+    if [ "$USE_BROWSER_MODE" -eq 1 ]; then
+        echo -e "${CYAN}[*] Abriendo en navegador web estándar...${NC}"
+        if command -v xdg-open &> /dev/null; then
+            xdg-open "$URL" &> /dev/null &
+        elif can_run_browser firefox; then
             firefox --new-window "$URL" &> /dev/null &
             APP_PID=$!
-        else
-            echo -e "${RED}[✗] No se encontró un navegador compatible con el modo aplicación.${NC}"
-            echo -e "    Instala Brave, Chromium, Google Chrome o Microsoft Edge."
-            exit 1
+        fi
+    else
+        # Asegurar integración de escritorio e iconos si no existen
+        if [ ! -f "${HOME}/.local/share/applications/airgeddon-gui.desktop" ]; then
+            bash "${SCRIPT_DIR}/install-desktop.sh" &> /dev/null || true
+        fi
+
+        # Perfil para la ventana de escritorio
+        APP_PROFILE="${HOME}/.config/airgeddon-gui/app-profile"
+        mkdir -p "${APP_PROFILE}/Default"
+
+        # Desactivar gestor de contraseñas y notificaciones en el perfil de Chromium
+        node -e '
+          const fs = require("fs");
+          const p = process.argv[1] + "/Default/Preferences";
+          let prefs = {};
+          try { prefs = JSON.parse(fs.readFileSync(p, "utf8")); } catch {}
+          prefs.credentials_enable_service = false;
+          prefs.profile = prefs.profile || {};
+          prefs.profile.password_manager_enabled = false;
+          prefs.profile.default_content_setting_values = prefs.profile.default_content_setting_values || {};
+          prefs.profile.default_content_setting_values.notifications = 2;
+          try { fs.writeFileSync(p, JSON.stringify(prefs, null, 2)); } catch {}
+        ' "$APP_PROFILE" 2>/dev/null || true
+
+        APP_LAUNCHED=0
+        for b in brave-browser brave google-chrome-stable google-chrome chromium chromium-browser microsoft-edge; do
+            if can_run_browser "$b"; then
+                echo -e "${GREEN}[*] Abriendo ventana nativa de airgeddon GUI (${b})...${NC}"
+                "$b" --app="$URL" \
+                     --class="airgeddon-gui" \
+                     --name="airgeddon-gui" \
+                     --user-data-dir="$APP_PROFILE" \
+                     --window-size=1280,820 \
+                     --disable-save-password-bubble \
+                     --disable-notifications \
+                     --deny-permission-prompts \
+                     --disable-features=PasswordManager,AutofillServerCommunication,Translate,OptimizationHints \
+                     --password-store=basic \
+                     --no-default-browser-check \
+                     --no-first-run \
+                     &> /dev/null &
+                CANDIDATE_PID=$!
+                sleep 0.3
+                if kill -0 "$CANDIDATE_PID" 2>/dev/null; then
+                    APP_PID="$CANDIDATE_PID"
+                    APP_LAUNCHED=1
+                    break
+                fi
+            fi
+        done
+
+        if [ "$APP_LAUNCHED" -eq 0 ]; then
+            if can_run_browser firefox; then
+                echo -e "${YELLOW}[*] Abriendo ventana con Firefox...${NC}"
+                firefox --new-window "$URL" &> /dev/null &
+                APP_PID=$!
+            elif command -v xdg-open &> /dev/null; then
+                echo -e "${CYAN}[*] Abriendo con navegador del sistema (xdg-open)...${NC}"
+                xdg-open "$URL" &> /dev/null &
+            else
+                echo -e "${YELLOW}[!] No se detectó navegador automático.${NC}"
+            fi
         fi
     fi
 fi
 
-# 9. Si la ventana de la aplicación está abierta, esperar a que el usuario la cierre
-if [ -n "$APP_PID" ]; then
+# 9. Esperar mientras la aplicación o el servidor estén activos
+echo -e "${CYAN}    ✦ airgeddon GUI en ejecución en ${URL}${NC}"
+echo -e "${CYAN}    Presiona Ctrl+C en esta terminal cuando desees terminar.${NC}\n"
+
+if [ -n "$APP_PID" ] && kill -0 "$APP_PID" 2>/dev/null; then
+    # La ventana nativa sigue abierta y en ejecución; esperar hasta que el usuario la cierre
     wait "$APP_PID" 2>/dev/null || true
     cleanup
 elif [ -n "$SERVER_PID" ]; then
-    echo -e "${CYAN}    Presiona Ctrl+C en esta terminal cuando desees terminar.${NC}\n"
-    wait "$SERVER_PID"
+    # Modo navegador o ventana delegada a proceso existente; mantener vivo el servidor
+    wait "$SERVER_PID" 2>/dev/null || true
 fi

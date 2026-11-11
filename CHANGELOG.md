@@ -64,6 +64,9 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   ("airgeddon avisó de 18 variables ausentes...") en lugar de apilar los 18 avisos en el modal.
 - El bloque de texto previo al prompt ya no se corta en las líneas vacías, que son las que airgeddon usa para
   separar sus avisos.
+- Se corrige el cierre prematuro del servidor en `airgeddon-gui.sh` provocado por la finalización rápida del proceso lanzador del navegador (como wrappers o instancias existentes).
+- Se añade comprobación de ejecución real (`can_run_browser`) para evitar falsos positivos con wrappers rotos en el sistema.
+- Se incorporan opciones de línea de comandos en `airgeddon-gui.sh`: `--help` (`-h`), `--browser` (`-b`) y `--server-only` (`-s`).
 
 ### Security
 - La contraseña de `sudo` solo reside en la memoria RAM del proceso, se enmascara en la salida y se invalida con
@@ -74,7 +77,8 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - Se desactivan el autoguardado de contraseñas y los avisos de notificaciones del navegador en modo aplicación.
 - **Protección CSRF**: las peticiones que modifican el estado se rechazan cuando el encabezado `Origin` no
   corresponde al propio servidor, de modo que una página web ajena no puede invocar la API local.
-- Las credenciales de la URL del remoto de git se ocultan antes de mostrarse en la interfaz de actualizaciones.
+- **Protección CSWSH (Cross-Site WebSocket Hijacking)**: validación del encabezado `Origin` en el handshake de WebSocket `/ws`, rechazando conexiones ajenas al servidor local.
+- Ocultación exhaustiva de tokens y credenciales en URLs de remotos git en logs y respuestas de la API (`https://<token>@...` y `https://user:<token>@...`).
 
 ## [1.0.0] - 2026-11-09
 

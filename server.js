@@ -31,9 +31,62 @@ const AIRGEDDON_SCRIPT = path.join(AIRGEDDON_DIR, 'airgeddon.sh');
 const AIRGEDDONRC = path.join(AIRGEDDON_DIR, '.airgeddonrc');
 const MAX_BUFFER = 400 * 1024;
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Protección CSRF / control de origen (HTTP y WebSocket)
+// ─────────────────────────────────────────────────────────────────────────────
+// El servidor escucha solo en 127.0.0.1, pero cualquier página web abierta en
+// el navegador puede intentar llamar a http://127.0.0.1:3845 desde el origen
+// del atacante. Como la API y el WebSocket exponen acciones sensibles
+// (autenticación sudo, escribir .airgeddonrc, terminal interactiva con root),
+// se exige que las peticiones mutadoras y conexiones WS provengan del propio
+// servidor.
+
+const SELF_ORIGINS = new Set([
+  `http://${HOST}:${PORT}`,
+  `http://localhost:${PORT}`,
+  `http://127.0.0.1:${PORT}`,
+  `https://${HOST}:${PORT}`,
+  `https://localhost:${PORT}`,
+  `https://127.0.0.1:${PORT}`,
+]);
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+/** Comprueba que el Origin de la petición sea el propio servidor. */
+function isTrustedOrigin(req) {
+  if (!req) return true;
+  const origin = typeof req.get === 'function'
+    ? req.get('origin')
+    : (req.headers && (req.headers.origin || req.headers.Origin));
+  // Sin Origin: cliente local (curl, apps nativas, modo escritorio).
+  // No es falsificable desde un navegador, así que se acepta.
+  if (!origin) return true;
+  if (SELF_ORIGINS.has(origin)) return true;
+  // Algunos navegadores reportan el origen como "null" en contextos local-file.
+  // Se acepta solo si la petición viene del propio servidor por IP o host local.
+  if (origin === 'null') {
+    const host = typeof req.get === 'function'
+      ? req.get('host')
+      : (req.headers && (req.headers.host || req.headers.Host));
+    return !host || host === `${HOST}:${PORT}` || host === `localhost:${PORT}` || host === `127.0.0.1:${PORT}`;
+  }
+  return false;
+}
+
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server, path: '/ws' });
+const wss = new WebSocketServer({
+  server,
+  path: '/ws',
+  verifyClient: (info, done) => {
+    const ok = isTrustedOrigin(info.req);
+    if (!ok) {
+      const origin = info.req?.headers?.origin || 'sin origen';
+      logSystem('error', `Origen WebSocket bloqueado: ${origin}`);
+      return done(false, 403, 'Origen de WebSocket no permitido');
+    }
+    done(true);
+  },
+});
 
 app.disable('x-powered-by');
 // Compression
@@ -55,42 +108,6 @@ app.use((req, res, next) => {
   );
   next();
 });
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Protección CSRF / control de origen
-// ─────────────────────────────────────────────────────────────────────────────
-// El servidor escucha solo en 127.0.0.1, pero cualquier página web abierta en
-// el navegador puede intentar llamar a http://127.0.0.1:3845 desde el origen
-// del atacante. Como la API expone acciones sensibles (autenticación sudo,
-// escribir .airgeddonrc, matar procesos, aplicar actualizaciones), se exige
-// que las peticiones mutadoras envíen un Origin propio.
-//
-// Los navegadores siempre envían Origin en las peticiones CORS y en las
-// peticiones POST/PUT/DELETE. Las peticiones del propio cliente (fetch/XHR
-// desde la app) también lo hacen, porque se sirven desde el mismo origen.
-
-const SELF_ORIGINS = new Set([
-  `http://${HOST}:${PORT}`,
-  `http://localhost:${PORT}`,
-  `http://127.0.0.1:${PORT}`,
-]);
-const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
-
-/** Comprueba que el Origin de la petición sea el propio servidor. */
-function isTrustedOrigin(req) {
-  const origin = req.get('origin');
-  // Sin Origin: cliente local (curl, apps nativas, modo escritorio).
-  // No es falsificable desde un navegador, así que se acepta.
-  if (!origin) return true;
-  if (SELF_ORIGINS.has(origin)) return true;
-  // Algunos navegadores reportan el origen como "null" en contextos local-file.
-  // Se acepta solo si la petición viene del propio servidor por IP.
-  if (origin === 'null') {
-    const host = req.get('host');
-    return !host || host === `${HOST}:${PORT}`;
-  }
-  return false;
-}
 
 app.use((req, res, next) => {
   if (SAFE_METHODS.has(req.method)) return next();
@@ -314,11 +331,14 @@ function redact(text) {
  * Los remotos configurados con token suelen tener la forma:
  *   https://x-access-token:<TOKEN>@github.com/usuario/repo.git
  *   https://usuario:<TOKEN>@github.com/usuario/repo.git
+ *   https://<TOKEN>@github.com/usuario/repo.git
  * Esas URLs se exponen al cliente, así que el token debe desaparecer.
  */
 function redactUrlCredentials(url) {
   if (!url) return '';
-  return String(url).replace(/(\/\/[^/@\s]+):([^/@\s]+)@/, '$1:••••••@');
+  return String(url)
+    .replace(/(\/\/[^/@\s]+):([^/@\s]+)@/, '$1:••••••@')
+    .replace(/(\/\/)([^/@:\s]+)@/, '$1••••••@');
 }
 
 async function startSession({ cols = 120, rows = 40 } = {}) {
@@ -1212,10 +1232,12 @@ app.post('/api/system/updates/apply', async (req, res) => {
     logSystem('info', 'Iniciando actualización de airgeddon GUI...');
     const pull = await execFileP('git', ['pull', '--rebase'], { cwd: __dirname, timeout: 30000 });
     if (!pull.ok) {
-      logSystem('error', `Error en git pull: ${pull.stderr || pull.stdout}`);
-      return res.status(500).json({ ok: false, error: pull.stderr || pull.stdout || 'Error al descargar actualización' });
+      const errOut = redact(redactUrlCredentials(pull.stderr || pull.stdout));
+      logSystem('error', `Error en git pull: ${errOut}`);
+      return res.status(500).json({ ok: false, error: errOut || 'Error al descargar actualización' });
     }
-    logSystem('stdout', pull.stdout || 'Código actualizado');
+    const cleanOut = redact(redactUrlCredentials(pull.stdout || 'Código actualizado'));
+    logSystem('stdout', cleanOut);
 
     logSystem('info', 'Actualizando dependencias con npm install...');
     const npmInst = await execFileP('npm', ['install', '--production'], { cwd: __dirname, timeout: 60000 });
@@ -1234,7 +1256,11 @@ app.post('/api/system/updates/apply', async (req, res) => {
 // WebSocket: PTY
 // ─────────────────────────────────────────────────────────────────────────────
 
-wss.on('connection', async (ws) => {
+wss.on('connection', async (ws, req) => {
+  if (!isTrustedOrigin(req)) {
+    try { ws.close(1008, 'Origen no permitido'); } catch {}
+    return;
+  }
   send(ws, {
     type: 'hello',
     session: sessionSnapshot(),

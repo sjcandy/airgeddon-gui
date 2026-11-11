@@ -65,7 +65,6 @@ cp -a "${SCRIPT_DIR}/system-requirements.txt" "${PKG_DIR}/opt/airgeddon-gui/"
 
 # Licencia y atribución (requisito de Debian: el copyright debe ser visible)
 cp -a "${SCRIPT_DIR}/LICENSE" "${PKG_DIR}/usr/share/doc/${PKG_NAME}/copyright"
-cp -a "${SCRIPT_DIR}/NOTICE" "${PKG_DIR}/usr/share/doc/${PKG_NAME}/NOTICE"
 cp -a "${SCRIPT_DIR}/README.md" "${PKG_DIR}/usr/share/doc/${PKG_NAME}/README.md"
 cp -a "${SCRIPT_DIR}/CHANGELOG.md" "${PKG_DIR}/usr/share/doc/${PKG_NAME}/CHANGELOG.md"
 
@@ -97,7 +96,7 @@ Type=Application
 Name=airgeddon GUI
 GenericName=Auditoría de Redes WiFi
 Comment=Herramienta de auditoría inalámbrica con interfaz gráfica nativa
-Exec=/usr/bin/airgeddon-gui --app
+Exec=/usr/bin/airgeddon-gui
 Icon=airgeddon-gui
 Terminal=false
 Categories=Network;Security;System;

@@ -9,7 +9,7 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
 ### Added
 - Aplicación de escritorio nativa para Linux: integrador `.desktop`, iconos multirresolución (16–256 px),
-  alias Wayland/KWin y lanzador `airgeddon-gui.sh` con modo ventana (`--app`) y modo navegador (`--browser`).
+  alias Wayland/KWin y lanzador `airgeddon-gui.sh` con apertura de ventana nativa de escritorio.
 - Empaquetado nativo para **Debian / Ubuntu / Kali / Parrot** (`build-deb.sh` → `.deb`) y para
   **Arch / CachyOS / Manjaro** (`PKGBUILD` como paquete VCS).
 - Instalador interactivo `install.sh` con detección del gestor de paquetes (`pacman` / `apt` / `dnf`),
@@ -28,7 +28,7 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - `system-requirements.txt` con los comandos de instalación por distribución.
 - Tests unitarios del parser con `node:test` (`npm test`).
 - Documentación profesional: README con capturas, arquitectura, instalación por gestor de paquetes,
-  `NOTICE` con la atribución a airgeddon, `SECURITY.md`, `CODE_OF_CONDUCT.md` y CI con GitHub Actions.
+  CI con GitHub Actions y bloque de créditos con la atribución a airgeddon (GPLv3).
 
 ### Changed
 - El escaneo de redes se delega en `airodump-ng` con salida CSV y actualización en vivo, en lugar de parsear la

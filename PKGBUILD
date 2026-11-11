@@ -62,7 +62,6 @@ package() {
   install -Dm755 airgeddon-gui.sh "${pkgdir}/opt/airgeddon-gui/airgeddon-gui.sh"
   install -Dm644 system-requirements.txt "${pkgdir}/opt/airgeddon-gui/system-requirements.txt"
   install -Dm644 LICENSE "${pkgdir}/opt/airgeddon-gui/LICENSE"
-  install -Dm644 NOTICE "${pkgdir}/opt/airgeddon-gui/NOTICE"
   cp -a public "${pkgdir}/opt/airgeddon-gui/public"
 
   # Documentación
@@ -85,7 +84,7 @@ Type=Application
 Name=airgeddon GUI
 GenericName=Auditoría de Redes WiFi
 Comment=Herramienta de auditoría inalámbrica con interfaz gráfica nativa
-Exec=/usr/bin/airgeddon-gui --app
+Exec=/usr/bin/airgeddon-gui
 Icon=airgeddon-gui
 Terminal=false
 Categories=Network;Security;System;

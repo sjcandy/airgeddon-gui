@@ -65,10 +65,11 @@ búfer PTY, lo interpreta y reconstruye la interacción como interfaz gráfica n
 ### 🖥️ Aplicación de escritorio nativa
 
 - Se integra en el menú de aplicaciones del sistema (`~/.local/share/applications/airgeddon-gui.desktop`).
-- Modo de **ventana independiente** (`--app`): sin barra de direcciones, sin pestañas, sin barra de herramientas.
+- **Ventana independiente**: sin barra de direcciones, sin pestañas, sin barra de herramientas.
 - Icono propio multirresolución (16 → 256 px) en la barra de tareas, con `StartupWMClass` para que el botón
   `Alt + Tab` y el dock lo asocien correctamente.
 - Gestiónor de contraseñas y avisos de notificaciones del navegador **desactivados** en el perfil dedicado.
+- Sin modo web: la aplicación se abre siempre en su propia ventana de escritorio.
 
 ### 🤖 Asistente visual inteligente
 
@@ -238,19 +239,30 @@ git clone https://github.com/v1s1t0r1sh3r3/airgeddon.git ~/airgeddon
 git clone https://github.com/sjcandy/airgeddon-gui.git
 cd airgeddon-gui
 npm install
-node server.js
 ```
 
-La interfaz queda disponible en <http://127.0.0.1:3845>. Para usarla con airgeddon, apunta la variable
-`AIRGEDDON_DIR` a tu instalación:
+Para ejecutarla como aplicación de escritorio:
+
+```bash
+./airgeddon-gui.sh
+```
+
+Si necesitas arrancar solo el servidor (por ejemplo para depurar), puedes lanzar `node server.js` directamente y
+apuntar la variable `AIRGEDDON_DIR` a tu instalación de airgeddon:
 
 ```bash
 AIRGEDDON_DIR=/ruta/a/airgeddon node server.js
 ```
 
+> En ese caso la interfaz queda accesible en <http://127.0.0.1:3845>, pero el uso previsto y soportado es siempre
+> mediante el lanzador de escritorio.
+
 ---
 
 ## 🎮 Uso
+
+airgeddon GUI es **exclusivamente una aplicación de escritorio**. No tiene modo navegador: siempre se abre en una
+ventana nativa e independiente, sin barras de direcciones, pestañas ni barra de herramientas.
 
 ### Desde el menú de aplicaciones
 
@@ -259,12 +271,13 @@ Pulsa **Super / Windows**, escribe `airgeddon` y haz clic en el icono. Se abre c
 ### Desde la terminal
 
 ```bash
-./airgeddon-gui.sh              # modo aplicación (ventana nativa)
-./airgeddon-gui.sh --browser    # modo navegador (pestaña normal)
+./airgeddon-gui.sh
 ```
 
 El lanzador comprueba las dependencias, libera el puerto `3845` si está ocupado, arranca el servidor, espera a que
 responda y abre la ventana.
+
+> ⚠️ Necesita una sesión gráfica activa (`DISPLAY` o `WAYLAND_DISPLAY`). No se puede ejecutar en modo headless.
 
 ### Flujo típico
 
@@ -304,7 +317,8 @@ responda y abre la ventana.
 
 `sudo` · `iproute2` (`ip`) · `iw` · `wireless-tools` · `aircrack-ng` · `xterm` · `curl` · `git` ·
 `python3` + `Pillow` (solo para la integración de escritorio) · un navegador Chromium
-(Brave / Chrome / Chromium / Edge) para el modo ventana nativa.
+(Brave / Chrome / Chromium / Edge), que se usa como **motor de la ventana de aplicación**, no como
+navegador web.
 
 Consulta [`system-requirements.txt`](system-requirements.txt) para los comandos exactos por distribución.
 
@@ -314,7 +328,7 @@ Consulta [`system-requirements.txt`](system-requirements.txt) para los comandos 
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│  Navegador (Chromium en modo --app)                              │
+│  Ventana de escritorio (Chromium en modo --app)                  │
 │                                                                  │
 │  app.js ─── estado global, WebSocket, atajos, vistas              │
 │    ├── parser.js     clasifica la pantalla de airgeddon           │
@@ -369,7 +383,6 @@ npm run lint      # comprobación sintáctica de server.js y public/js/*.js
 ```
 
 Contribuciones bienvenidas: fork, rama, `npm test` + `npm run lint`, commit y Pull Request.
-Ver [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
@@ -379,9 +392,9 @@ Este proyecto se distribuye bajo la licencia **MIT**. Consulta [LICENSE](LICENSE
 
 **airgeddon** es obra de [v1s1t0r1sh3r3](https://github.com/v1s1t0r1sh3r3) y se licencia bajo **GPLv3**.
 airgeddon GUI es un front-end independiente: **no incluye código de airgeddon**, lo invoca como proceso externo
-a través de una pseudo-terminal. Los logotipos de airgeddon se usan con fines de identificación y atribución.
-
-El detalle completo de la atribución, incluyendo qué recursos son de cada proyecto, está en **[NOTICE](NOTICE)**.
+a través de una pseudo-terminal. Los logotipos de airgeddon (`public/img/airgeddon-logo.jpg` y
+`public/img/airgeddon-logo-full.png`) son propiedad de sus autores y se usan aquí con fines de identificación y
+atribución. `public/img/app-icon.png` y `public/img/favicon.png` son recursos propios de este proyecto (MIT).
 
 ---
 

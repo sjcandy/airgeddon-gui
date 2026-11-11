@@ -1,0 +1,70 @@
+# ==============================================================================
+# airgeddon-gui — Requisitos del Sistema y Dependencias
+# ==============================================================================
+# Este proyecto está desarrollado en Node.js (JavaScript).
+# Las dependencias de Node.js se gestionan automáticamente con 'package.json'.
+#
+# A continuación se listan las dependencias del sistema requeridas para ejecutar
+# airgeddon GUI y la suite de herramientas inalámbricas en tu distribución Linux:
+# ==============================================================================
+
+# 1. Entorno de Ejecución (Node.js >= 18 y npm)
+# ------------------------------------------------------------------------------
+# Arch / CachyOS / Manjaro:
+#   sudo pacman -S --needed nodejs npm
+# Debian / Ubuntu / Kali / Parrot:
+#   sudo apt install -y nodejs npm
+# Fedora / RHEL:
+#   sudo dnf install -y nodejs npm
+#
+# Nota: la dependencia node-pty es un módulo nativo y necesita un compilador
+#   para compilarse la primera vez (se instala automáticamente con npm install).
+#   Arch / CachyOS:  sudo pacman -S --needed base-devel python
+#   Debian / Ubuntu: sudo apt install -y build-essential python3
+
+# 2. airgeddon (Script principal de auditoría)
+# ------------------------------------------------------------------------------
+# Repositorio oficial: https://github.com/v1s1t0r1sh3r3/airgeddon
+# airgeddon NO se incluye en este repositorio. Puedes clonarlo con:
+#   git clone https://github.com/v1s1t0r1sh3r3/airgeddon.git
+#
+# El instalador install.sh lo clona automáticamente junto a este proyecto
+# si no lo detecta en el sistema.
+
+# 3. Herramientas del Sistema y Auditoría Inalámbrica
+# ------------------------------------------------------------------------------
+# Esenciales:
+#   - aircrack-ng   (airmon-ng, airodump-ng, aireplay-ng)
+#   - wireless-tools / iw
+#   - xterm         (requerido por airgeddon para ventanas de procesos hijos)
+#   - sudo          (para privilegios de gestión de interfaces)
+#   - curl          (para comprobaciones y descargas)
+#   - git           (para actualizaciones y clonado)
+#   - iproute2      (comando `ip`, usado para enumerar interfaces)
+#
+# Recomendadas para ataques avanzados en airgeddon:
+#   - mdk4 / mdk3   (ataques DoS y deauth masivo)
+#   - lighttpd      (portal cautivo en Evil Twin)
+#   - dnsmasq       (DHCP / DNS para Evil Twin)
+#   - iptables      (enrutamiento de red)
+#   - ccze          (colorización de consola de airgeddon)
+#   - brave / chromium / chrome (para modo ventana nativa de escritorio sin barras)
+#
+# Solo para la integración de escritorio (install-desktop.sh):
+#   - python3 + Pillow  (generación de iconos multirresolución)
+#   - Arch / CachyOS:  sudo pacman -S --needed python-pillow
+#   - Debian / Ubuntu: sudo apt install -y python3-pil
+
+# Comandos de instalación rápida de complementos:
+# ------------------------------------------------------------------------------
+# Kali / Debian / Ubuntu / Parrot:
+#   sudo apt update && sudo apt install -y nodejs npm git curl aircrack-ng \
+#     xterm wireless-tools iw ccze iproute2 build-essential python3 python3-pil
+#
+# Arch / CachyOS / Manjaro:
+#   sudo pacman -S --needed nodejs npm git curl aircrack-ng xterm iw ccze \
+#     iproute2 base-devel python python-pillow brave-bin
+#
+# Fedora / RHEL:
+#   sudo dnf install -y nodejs npm git curl aircrack-ng xterm iw iproute \
+#     gcc-c++ make python3 python3-pillow

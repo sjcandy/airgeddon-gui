@@ -1,0 +1,61 @@
+# NOTICE — Atribución y créditos
+
+## Proyecto original: airgeddon
+
+**airgeddon-gui** es un front-end gráfico independiente para
+[airgeddon](https://github.com/v1s1t0r1sh3r3/airgeddon), el script de auditoría
+inalámbrica de v1s1t0r1sh3r3.
+
+| | |
+|---|---|
+| **Proyecto original** | airgeddon |
+| **Autor original** | [v1s1t0r1sh3r3](https://github.com/v1s1t0r1sh3r3) |
+| **Repositorio original** | https://github.com/v1s1t0r1sh3r3/airgeddon |
+| **Licencia del original** | GPLv3 |
+| **Autores de esta GUI** | [sjcandy](https://github.com/sjcandy) y colaboradores |
+| **Licencia de esta GUI** | MIT (ver [LICENSE](LICENSE)) |
+
+### Qué se ha volumen a este proyecto
+
+- Todo el código de la interfaz gráfica (`server.js`, `public/`, `test/`,
+  `install*.sh`, `build-deb.sh`, `PKGBUILD`) es obra original de airgeddon-gui.
+- **No** se ha copiado código fuente de airgeddon. airgeddon-gui lo invoca como
+  proceso externo a través de una pseudo-terminal (node-pty) y se comunica con él
+  leyendo y escribiendo en su terminal, tal y como haría una persona.
+- Los logotipos de airgeddon (`public/img/airgeddon-logo.jpg`,
+  `public/img/airgeddon-logo-full.png`) y el icono `logo-icon.png` son recurso
+  gráfico del proyecto original, propiedad de v1s1t0r1sh3r3, y se usan aquí con
+  fines de identificación y Attribution, bajo los términos de la GPLv3.
+- `public/img/app-icon.png` y `public/img/favicon.png` son recursos propios de
+  airgeddon-gui (MIT).
+
+### Responsabilidad
+
+airgeddon-gui es una capa de presentación. **airgeddon no se distribuye con este
+proyecto** y debe instalarse por separado desde su repositorio oficial:
+
+```bash
+git clone https://github.com/v1s1t0r1sh3r3/airgeddon.git
+```
+
+Los usuarios de airgeddon-gui son responsables del uso que hagan de airgeddon y
+del cumplimiento de la legislación aplicable en su país.
+
+---
+
+## Tecnologías de terceros
+
+Este proyecto se apoya en software de terceros, cada uno bajo su propia licencia:
+
+| Componente | Uso | Licencia |
+|---|---|---|
+| [Node.js](https://nodejs.org/) | Runtime | MIT |
+| [Express](https://expressjs.com/) | Servidor HTTP y API REST | MIT |
+| [ws](https://github.com/websockets/ws) | WebSockets | MIT |
+| [node-pty](https://github.com/microsoft/node-pty) | Pseudo-terminal | MIT |
+| [xterm.js](https://xtermjs.org/) | Emulador de terminal en el navegador | MIT |
+| [Lucide](https://lucide.dev/) | Iconografía | ISC |
+| [compression](https://github.com/expressjs/compression) | Compresión HTTP | MIT |
+
+A nivel de sistema se utilizan `aircrack-ng`, `iw`, `xterm`, `sudo`, `ip` y otras
+herramientas de auditoría, cada una bajo su propia licencia.

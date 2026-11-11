@@ -1,0 +1,55 @@
+{
+  "name": "airgeddon-gui",
+  "version": "2.0.0",
+  "private": true,
+  "description": "GUI local para airgeddon — interfaz gráfica para auditoría inalámbrica",
+  "keywords": [
+    "airgeddon",
+    "wifi",
+    "wireless",
+    "security",
+    "pentesting",
+    "audit",
+    "gui",
+    "aircrack-ng",
+    "wpa",
+    "wps"
+  ],
+  "homepage": "https://github.com/sjcandy/airgeddon-gui#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sjcandy/airgeddon-gui.git"
+  },
+  "bugs": {
+    "url": "https://github.com/sjcandy/airgeddon-gui/issues"
+  },
+  "license": "MIT",
+  "author": "sjcandy <sjcandy@users.noreply.github.com>",
+  "contributors": [
+    "v1s1t0r1sh3r3 (airgeddon original) <https://github.com/v1s1t0r1sh3r3>"
+  ],
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "test": "node --test",
+    "lint": "node --check server.js && for f in public/js/*.js; do node --check \"$f\"; done",
+    "build": "echo 'No build step required - static files served directly'"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-web-links": "^0.11.0",
+    "@xterm/xterm": "^5.5.0",
+    "compression": "^1.8.2",
+    "express": "^5.1.0",
+    "lucide": "^0.460.0",
+    "node-pty": "^1.0.0",
+    "ws": "^8.18.0"
+  },
+  "onlyBuiltDependencies": [
+    "node-pty"
+  ],
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  }
+}

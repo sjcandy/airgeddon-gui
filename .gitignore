@@ -1,0 +1,48 @@
+# Dependencies
+node_modules/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Backups
+*.bak
+*.backup
+
+# Test artifacts
+coverage/
+.nyc_output/
+
+# Build
+dist/
+build/
+build-deb/
+*.deb
+
+# airgeddon runtime
+.airgeddonrc.gui-backup
+airgeddon/
+app-profile/

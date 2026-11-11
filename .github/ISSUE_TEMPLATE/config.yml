@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Reportar una vulnerabilidad de seguridad
+    url: https://github.com/sjcandy/airgeddon-gui/security/advisories/new
+    about: Reporta los fallos de seguridad de forma privada, sin abrir un Issue público.
+  - name: airgeddon (proyecto original)
+    url: https://github.com/v1s1t0r1sh3r3/airgeddon/issues
+    about: Si tu reporte afecta a la lógica de auditoría de airgeddon en sí, corresponde al repositorio original.

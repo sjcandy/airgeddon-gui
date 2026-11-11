@@ -1,0 +1,50 @@
+name: Bug report
+description: Reportar un error reproducible
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Gracias por reportar. ⚠️ **No incluyas contraseñas, ESSID/MAC reales ni rutas con tu nombre de usuario.**
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Descripción
+      description: Qué ocurre y qué esperabas que ocurriera.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Pasos para reproducir
+      placeholder: |
+        1. Instalo airgeddon-gui con …
+        2. Abro la vista …
+        3. Pulso …
+        4. Observo …
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Entorno
+      description: |
+        - airgeddon-gui:
+        - airgeddon:
+        - Node.js:
+        - Distribución Linux:
+        - Adaptador WiFi:
+      render: markdown
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Salida de la consola o del diagnóstico
+      description: Salida relevante, anonimizada.
+      render: shell

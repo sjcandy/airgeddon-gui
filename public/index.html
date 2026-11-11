@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark light">
+  <title>airgeddon GUI</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="/img/favicon.png">
+  <link rel="icon" type="image/png" sizes="128x128" href="/img/logo-icon.png">
+  <link rel="icon" type="image/png" sizes="256x256" href="/img/app-icon.png">
+  <link rel="shortcut icon" href="/favicon.ico">
+  <link rel="apple-touch-icon" href="/img/app-icon.png">
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#0d1117">
+  <meta name="application-name" content="airgeddon GUI">
+  <meta name="apple-mobile-web-app-title" content="airgeddon GUI">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <link rel="stylesheet" href="/vendor/xterm/css/xterm.css">
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+  <meta name="ag-distro" content="auto-detect">
+<body>
+  <div class="app" id="app">
+    <aside class="sidebar" id="sidebar">
+      <div class="sb-brand">
+        <div class="brand-icon">
+          <img src="/img/logo-icon.png" alt="airgeddon" class="brand-img">
+        </div>
+        <div class="brand-text">
+          <strong>airgeddon</strong>
+          <span>GUI · v2.0</span>
+        </div>
+        <button class="icon-btn ghost sb-collapse" id="sbCollapse" data-action="toggle-sidebar" title="Colapsar barra">
+          <i data-lucide="panel-left-close"></i>
+        </button>
+      </div>
+
+      <nav class="sb-nav" id="sbNav">
+        <div class="nav-group-label">General</div>
+        <button class="nav-item active" data-view="dashboard" data-action="switch-view" title="Panel" aria-label="Panel">
+          <i data-lucide="layout-dashboard"></i><span>Panel</span>
+        </button>
+        <button class="nav-item" data-view="audits" data-action="switch-view" title="Auditorías" aria-label="Auditorías">
+          <i data-lucide="shield-half"></i><span>Auditorías</span>
+        </button>
+        <button class="nav-item" data-view="networks" data-action="switch-view" title="Redes cercanas" aria-label="Redes">
+          <i data-lucide="radar"></i><span>Redes</span>
+          <span class="nav-count hidden" id="navNetCount">0</span>
+        </button>
+
+        <div class="nav-group-label">Sistema</div>
+        <button class="nav-item" data-view="interfaces" data-action="switch-view" title="Interfaces Wi-Fi" aria-label="Interfaces">
+          <i data-lucide="network"></i><span>Interfaces</span>
+        </button>
+        <button class="nav-item" data-view="history" data-action="switch-view" title="Historial y eventos" aria-label="Historial">
+          <i data-lucide="history"></i><span>Historial</span>
+        </button>
+        <button class="nav-item" data-view="config" data-action="switch-view" title="Configuración" aria-label="Configuración">
+          <i data-lucide="sliders-horizontal"></i><span>Configuración</span>
+        </button>
+        <button class="nav-item" data-view="diagnostics" data-action="switch-view" title="Diagnóstico del entorno" aria-label="Diagnóstico">
+          <i data-lucide="stethoscope"></i><span>Diagnóstico</span>
+        </button>
+      </nav>
+
+      <div class="sb-foot">
+        <button class="sudo-card" id="sudoCard" data-action="auth-open" title="Estado de sudo">
+          <span class="sudo-dot off" id="sudoDot"></span>
+          <span class="sudo-copy">
+            <strong id="sudoTitle">sudo bloqueado</strong>
+            <small id="sudoSub">Haz clic para autenticar</small>
+          </span>
+          <i data-lucide="key-round" class="sudo-key"></i>
+        </button>
+        <div class="session-mini" id="sessionMini">
+          <span class="dot off" id="sbDot"></span>
+          <span id="sbStatus">Sin sesión</span>
+        </div>
+      </div>
+    </aside>
+
+    <div class="main">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button class="icon-btn ghost mobile-menu" id="mobileMenu" data-action="toggle-mobile" title="Menú móvil">
+            <i data-lucide="menu"></i>
+          </button>
+          <button class="icon-btn ghost sidebar-toggle" id="sidebarToggle" data-action="toggle-sidebar" title="Expandir / colapsar menú lateral (Ctrl+B)">
+            <i data-lucide="panel-left"></i>
+          </button>
+          <div class="page-heading">
+            <h1 id="pageTitle">Panel</h1>
+            <div class="breadcrumb" id="breadcrumb">
+              <span class="crumb-muted">airgeddon</span>
+            </div>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <div class="mode-switch" id="modeSwitch" role="group" aria-label="Modo de interacción">
+            <button class="mode-btn active" id="modeAssistant" type="button" data-action="mode-assistant" title="Responder con ventanas del asistente">
+              <i data-lucide="mouse-pointer-click"></i><span>Asistente</span>
+            </button>
+            <button class="mode-btn" id="modeConsole" type="button" data-action="mode-console" title="Responder escribiendo en la consola">
+              <i data-lucide="terminal"></i><span>Consola</span>
+            </button>
+          </div>
+          <button class="pending-pill hidden" id="pendingPill" data-action="open-prompt">
+            <span class="pending-pulse"></span>
+            <span id="pendingLabel">Acción pendiente</span>
+          </button>
+          <div class="status-pill" id="sessionPill">
+            <span class="dot off" id="pillDot"></span>
+            <span id="pillText">Sin sesión</span>
+          </div>
+          <button class="icon-btn ghost" id="killHungTop" data-action="kill-hung" title="Matar procesos colgados">
+            <i data-lucide="shield-alert"></i>
+          </button>
+          <button class="icon-btn ghost" id="consoleToggleTop" data-action="toggle-console" title="Consola (Ctrl+`)">
+            <i data-lucide="terminal"></i>
+          </button>
+        </div>
+      </header>
+
+      <div class="view-scroll" id="viewScroll">
+        <section class="view" id="view-dashboard"></section>
+        <section class="view hidden" id="view-audits"></section>
+        <section class="view hidden" id="view-networks"></section>
+        <section class="view hidden" id="view-interfaces"></section>
+        <section class="view hidden" id="view-history"></section>
+        <section class="view hidden" id="view-config"></section>
+        <section class="view hidden" id="view-diagnostics"></section>
+      </div>
+
+      <div class="console-drawer" id="consoleDrawer">
+        <div class="console-resize" id="consoleResize"></div>
+        <div class="console-head" id="consoleHead">
+          <div class="console-title">
+            <i data-lucide="terminal"></i>
+            <span>Consola</span>
+            <span class="console-badge idle" id="consoleBadge">IDLE</span>
+          </div>
+          <div class="console-tabs" id="consoleTabs">
+            <button class="console-tab active" data-ctab="terminal">airgeddon</button>
+            <button class="console-tab" data-ctab="system">Sistema</button>
+            <button class="console-tab" data-ctab="events">Eventos</button>
+          </div>
+          <div class="console-actions" data-no-toggle>
+            <button class="btn btn-accent btn-sm" id="btnReturnAssistant" data-action="return-assistant" style="height:24px;padding:0 9px;font-size:11px;font-weight:700;gap:5px;border-radius:6px;margin-right:6px" title="Volver a los pasos visuales del Asistente">
+              <i data-lucide="sparkles" style="width:12px;height:12px"></i><span>Asistente visual</span>
+            </button>
+            <button class="icon-btn xs" id="consoleScroll" data-action="console-scroll" title="Ir al final">
+              <i data-lucide="arrow-down-to-line"></i>
+            </button>
+            <button class="icon-btn xs" id="consoleClear" data-action="console-clear" title="Limpiar consola">
+              <i data-lucide="eraser"></i>
+            </button>
+            <button class="icon-btn xs" id="consoleDownload" data-action="console-download" title="Descargar log">
+              <i data-lucide="download"></i>
+            </button>
+            <button class="icon-btn xs" id="consoleMaximize" data-action="console-maximize" title="Maximizar consola">
+              <i data-lucide="maximize-2"></i>
+            </button>
+            <button class="icon-btn xs" id="consoleCopySel" data-action="console-copy-sel" title="Copiar seleccion">
+              <i data-lucide="copy"></i>
+            </button>
+            <button class="icon-btn xs" id="consoleExpand" data-action="toggle-console" title="Expandir / contraer">
+              <i data-lucide="chevron-up"></i>
+            </button>
+          </div>
+        </div>
+        <div class="console-body" id="consoleBody">
+          <div class="console-pane active" id="paneTerminal">
+            <div id="terminalHost"></div>
+          </div>
+          <div class="console-pane" id="paneSystem">
+            <div class="system-log-list" id="systemLogHost"></div>
+          </div>
+          <div class="console-pane" id="paneEvents">
+            <div class="events-list" id="eventsList"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="sidebar-scrim" id="sidebarScrim" data-action="toggle-mobile"></div>
+  <div class="modal-root" id="modalRoot"></div>
+  <div class="toast-root" id="toastRoot"></div>
+
+  <script src="/vendor/lucide/lucide.min.js"></script>
+  <script src="/vendor/xterm/lib/xterm.js"></script>
+  <script src="/vendor/addon-fit/lib/addon-fit.js"></script>
+  <script src="/vendor/addon-web-links/lib/addon-web-links.js"></script>
+  <script src="/js/i18n.js"></script>
+  <script src="/js/data.js"></script>
+  <script src="/js/utils.js"></script>
+  <script src="/js/api.js"></script>
+  <script src="/js/terminal.js"></script>
+  <script src="/js/parser.js"></script>
+  <script src="/js/interaction.js"></script>
+  <script src="/js/views.js"></script>
+  <script src="/js/app.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(function() {});
+    }
+  </script>
+</body>
+</html>

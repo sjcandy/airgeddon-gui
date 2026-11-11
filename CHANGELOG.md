@@ -60,6 +60,10 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   otra vez dentro del cuerpo.
 - Los avisos multilínea de airgeddon (por ejemplo, la advertencia de una variable ausente en `.airgeddonrc`) se
   muestran completos en lugar de solo su última línea.
+- Los avisos repetidos de variables ausentes en `.airgeddonrc` se resumen en un solo mensaje
+  ("airgeddon avisó de 18 variables ausentes...") en lugar de apilar los 18 avisos en el modal.
+- El bloque de texto previo al prompt ya no se corta en las líneas vacías, que son las que airgeddon usa para
+  separar sus avisos.
 
 ### Security
 - La contraseña de `sudo` solo reside en la memoria RAM del proceso, se enmascara en la salida y se invalida con

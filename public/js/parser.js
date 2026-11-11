@@ -502,26 +502,63 @@ AG.parser = (() => {
       // ocupar varias líneas (por ejemplo, la advertencia de una variable
       // ausente en .airgeddonrc), así que se recoge el bloque completo de
       // líneas consecutivas en lugar de solo la última.
-      const skipLine = (line) =>
-        !line || SEPARATOR_RE.test(line) || /^>\s*$/.test(line) ||
-        /^pulsa/i.test(line) || /^continuar/i.test(line);
-
       const block = [];
-      for (let i = lastIdx - 1; i >= Math.max(0, lastIdx - 8); i--) {
+      // Patrón de aviso de airgeddon: anuncia una variable ausente.
+      const AVISO_VAR_RE = /No se ha encontrado la variable\s+[A-Z0-9_]+/;
+
+      for (let i = lastIdx - 1; i >= Math.max(0, lastIdx - 120); i--) {
         const line = cleanLine(String(lines[i] || ''));
-        if (skipLine(line)) {
-          // Un separador corta el bloque: lo que hay por encima pertenece a
-          // otra sección (por ejemplo, el menú anterior).
-          if (SEPARATOR_RE.test(line) && block.length) break;
+        // Las líneas vacías no cortan el bloque: airgeddon separa sus avisos
+        // con una línea en blanco entre cada uno.
+        if (!line) continue;
+        if (SEPARATOR_RE.test(line)) {
+          // Un separador real corta el bloque: lo que hay por encima
+          // pertenece a otra sección (por ejemplo, el menú anterior).
+          if (block.length) break;
           continue;
         }
+        if (/^>\s*$/.test(line) || /^pulsa/i.test(line) || /^continuar/i.test(line)) continue;
         block.unshift(line);
       }
-      // Se conserva el bloque tal cual, pero se limita su longitud para que el
-      // modal no se llene de texto.
-      let precedingMessage = block.join(' ').trim();
-      if (precedingMessage.length > 400) {
-        precedingMessage = precedingMessage.slice(0, 400).trimEnd() + '…';
+
+      // Si el bloque contiene avisos de variables ausentes, se recorta para
+      // que empiece en el primer aviso: las líneas anteriores pertenecen a
+      // otra sección (por ejemplo, el menú previo).
+      // El aviso puede ocupar varias líneas: "Atención. Por favor revisa el
+      // fichero ..." y "... No se ha encontrado la variable X ...". Se busca el
+      // inicio del primer aviso completo.
+      let firstAviso = block.findIndex((l) => AVISO_VAR_RE.test(l));
+      if (firstAviso >= 0) {
+        // Retrocede hasta el comienzo del aviso (la línea "Atención...").
+        while (firstAviso > 0 && /^(Atenci[oó]n|Aviso|Error)\b/i.test(block[firstAviso - 1])) {
+          firstAviso--;
+        }
+        if (firstAviso > 0) block.splice(0, firstAviso);
+      }
+      // Los avisos de variables ausentes en .airgeddonrc se resumen: son
+      // siempre el mismo patrón repetido y mostrarlos uno a uno no aporta nada.
+      let precedingMessage = '';
+      const missingVars = [];
+      for (const line of block) {
+        const m = line.match(/No se ha encontrado la variable\s+([A-Z0-9_]+)/);
+        if (m) missingVars.push(m[1]);
+      }
+      if (missingVars.length >= 3) {
+        const uniqueVars = [...new Set(missingVars)];
+        const preview = uniqueVars.slice(0, 4).join(', ');
+        const more = uniqueVars.length > 4 ? ` y ${uniqueVars.length - 4} más` : '';
+        const rcPath = (block.join(' ').match(/fichero\s+(\S+\.airgeddonrc)/) || [])[1] || '';
+        precedingMessage = `airgeddon avisó de ${uniqueVars.length} ${uniqueVars.length === 1 ? 'variable ausente' : 'variables ausentes'} en .airgeddonrc (${preview}${more}). Se usarán los valores por defecto.`;
+        if (rcPath) {
+          precedingMessage += ` Fichero: ${rcPath}`;
+        }
+      } else {
+        // Se conserva el bloque tal cual, pero se limita su longitud para que
+        // el modal no se llene de texto.
+        precedingMessage = block.join(' ').trim();
+        if (precedingMessage.length > 400) {
+          precedingMessage = precedingMessage.slice(0, 400).trimEnd() + '…';
+        }
       }
 
       let isError = false;

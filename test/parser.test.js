@@ -270,3 +270,79 @@ test('sin mensaje previo usa el texto genérico y lo marca como tal', () => {
   assert.equal(result.isDefaultDesc, true);
   assert.match(result.desc, /esperando tu confirmación/);
 });
+
+test('resume los muchos avisos de variables ausentes en .airgeddonrc', () => {
+  const vars = [
+    'AIRGEDDON_5GHZ_ENABLED', 'AIRGEDDON_6GHZ_ENABLED', 'AIRGEDDON_AUTO_UPDATE',
+    'AIRGEDDON_DEBUG_MODE', 'AIRGEDDON_PLUGINS_ENABLED', 'AIRGEDDON_PRINT_HINTS',
+  ];
+  const lines = [' Opciones e idioma', ' Continuar', ''];
+  for (const v of vars) {
+    lines.push(` Atención. Por favor revisa el fichero /home/usuario/airgeddon/.airgeddonrc. No se ha encontrado la variable ${v}. El valor por defecto true será usado`);
+    lines.push('');
+  }
+  lines.push(' Pulsa la tecla [Enter] para continuar...');
+  lines.push('> ');
+
+  const result = screen(lines);
+  assert.equal(result.type, 'enter');
+  // Se resume en lugar de repetir cada aviso.
+  assert.match(result.desc, /6 variables ausentes/);
+  // No debe aparecer el menu previo.
+  assert.doesNotMatch(result.desc, /Opciones e idioma/);
+  // Y no debe duplicarse el texto.
+  assert.equal(result.desc, result.question);
+});
+
+test('un solo aviso de variable ausente se muestra completo', () => {
+  const result = screen([
+    ' Atención. Por favor revisa el fichero /home/usuario/airgeddon/.airgeddonrc. No se ha encontrado la variable AIRGEDDON_WINDOWS_HANDLING. El valor por defecto xterm será usado',
+    '',
+    ' Pulsa la tecla [Enter] para continuar...',
+    '> ',
+  ]);
+  assert.equal(result.type, 'enter');
+  assert.match(result.desc, /AIRGEDDON_WINDOWS_HANDLING/);
+  assert.match(result.desc, /valor por defecto xterm/);
+  assert.equal(result.desc, result.question);
+});
+
+test('con la salida real de airgeddon resume los 18 avisos de .airgeddonrc', () => {
+  // Salida real capturada de airgeddon v12.02: 18 avisos de variables
+  // ausentes (tu .airgeddonrc solo define AIRGEDDON_LANGUAGE) y un único
+  // "Pulsa Enter" al final.
+  const vars = [
+    'AIRGEDDON_5GHZ_ENABLED', 'AIRGEDDON_6GHZ_ENABLED', 'AIRGEDDON_AUTO_CHANGE_LANGUAGE',
+    'AIRGEDDON_AUTO_UPDATE', 'AIRGEDDON_BASIC_COLORS', 'AIRGEDDON_DEBUG_MODE',
+    'AIRGEDDON_DEVELOPMENT_MODE', 'AIRGEDDON_EVIL_TWIN_ESSID_STRIPPING',
+    'AIRGEDDON_EVIL_TWIN_SOUNDS', 'AIRGEDDON_EXTENDED_COLORS', 'AIRGEDDON_FORCE_IPTABLES',
+    'AIRGEDDON_FORCE_NETWORK_MANAGER_KILLING', 'AIRGEDDON_MDK_VERSION',
+    'AIRGEDDON_PLUGINS_ENABLED', 'AIRGEDDON_PRINT_HINTS', 'AIRGEDDON_SILENT_CHECKS',
+    'AIRGEDDON_SKIP_INTRO', 'AIRGEDDON_WINDOWS_HANDLING',
+  ];
+  const lines = [
+    '********************************** Bienvenid@ **********************************',
+    'Idioma Español del S.O. detectado. Soportado por el script. Se cambió automáticamente',
+    '',
+    'Tu distro tiene todas las herramientas esenciales necesarias. El script puede continuar...',
+    'Pulsa la tecla [Enter] para continuar...',
+    '',
+  ];
+  for (const v of vars) {
+    lines.push(` Atención. Por favor revisa el fichero /home/usuario/airgeddon/.airgeddonrc. No se ha encontrado la variable ${v}. El valor por defecto true será usado`);
+    lines.push('');
+  }
+  lines.push('Pulsa la tecla [Enter] para continuar...');
+  lines.push('> ');
+
+  const result = screen(lines);
+  assert.equal(result.type, 'enter');
+  // Resume en vez de repetir los 18 avisos.
+  assert.match(result.desc, /18 variables ausentes/);
+  assert.match(result.desc, /AIRGEDDON_5GHZ_ENABLED/);
+  // No debe arrastrar el texto del arranque de airgeddon.
+  assert.doesNotMatch(result.desc, /Bienvenid/);
+  assert.doesNotMatch(result.desc, /Idioma Español/);
+  // Y el texto no se duplica.
+  assert.equal(result.desc, result.question);
+});

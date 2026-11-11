@@ -254,15 +254,9 @@ apuntar la variable `AIRGEDDON_DIR` a tu instalación de airgeddon:
 AIRGEDDON_DIR=/ruta/a/airgeddon node server.js
 ```
 
-> En ese caso la interfaz queda accesible en <http://127.0.0.1:3845>, pero el uso previsto y soportado es siempre
-> mediante el lanzador de escritorio.
-
 ---
 
 ## 🎮 Uso
-
-airgeddon GUI es **exclusivamente una aplicación de escritorio**. No tiene modo navegador: siempre se abre en una
-ventana nativa e independiente, sin barras de direcciones, pestañas ni barra de herramientas.
 
 ### Desde el menú de aplicaciones
 

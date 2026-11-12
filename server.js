@@ -16,6 +16,7 @@ const path = require('path');
 const fs = require('fs');
 const fsp = fs.promises;
 const os = require('os');
+const crypto = require('crypto');
 const { spawn, execFile, execFileSync } = require('child_process');
 const { WebSocketServer, WebSocket } = require('ws');
 const pty = require('node-pty');
@@ -31,15 +32,27 @@ const AIRGEDDON_SCRIPT = path.join(AIRGEDDON_DIR, 'airgeddon.sh');
 const AIRGEDDONRC = path.join(AIRGEDDON_DIR, '.airgeddonrc');
 const MAX_BUFFER = 400 * 1024;
 
+// Token de sesión efímero generado criptográficamente en cada inicio del servidor.
+// Protege tanto WebSockets (CSWSH) como endpoints mutadores REST (CSRF), evitando
+// que páginas externas, iframes con sandbox o URIs data: puedan interactuar con la app.
+const SESSION_TOKEN = crypto.randomBytes(32).toString('hex');
+
+function isValidToken(token) {
+  if (typeof token !== 'string' || !token) return false;
+  const a = Buffer.from(token);
+  const b = Buffer.from(SESSION_TOKEN);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Protección CSRF / control de origen (HTTP y WebSocket)
 // ─────────────────────────────────────────────────────────────────────────────
-// El servidor escucha solo en 127.0.0.1, pero cualquier página web abierta en
+// El servidor escucha en 127.0.0.1, pero cualquier página web abierta en
 // el navegador puede intentar llamar a http://127.0.0.1:3845 desde el origen
 // del atacante. Como la API y el WebSocket exponen acciones sensibles
 // (autenticación sudo, escribir .airgeddonrc, terminal interactiva con root),
 // se exige que las peticiones mutadoras y conexiones WS provengan del propio
-// servidor.
+// servidor y presenten el token de sesión legítimo.
 
 const SELF_ORIGINS = new Set([
   `http://${HOST}:${PORT}`,
@@ -51,25 +64,36 @@ const SELF_ORIGINS = new Set([
 ]);
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
+const ALLOWED_HOSTS = new Set([
+  `${HOST}:${PORT}`,
+  `127.0.0.1:${PORT}`,
+  `localhost:${PORT}`,
+  `[::1]:${PORT}`,
+  HOST,
+  '127.0.0.1',
+  'localhost',
+  '[::1]',
+]);
+
 /** Comprueba que el Origin de la petición sea el propio servidor. */
 function isTrustedOrigin(req) {
-  if (!req) return true;
+  if (!req) return false;
   const origin = typeof req.get === 'function'
     ? req.get('origin')
     : (req.headers && (req.headers.origin || req.headers.Origin));
-  // Sin Origin: cliente local (curl, apps nativas, modo escritorio).
-  // No es falsificable desde un navegador, así que se acepta.
-  if (!origin) return true;
-  if (SELF_ORIGINS.has(origin)) return true;
-  // Algunos navegadores reportan el origen como "null" en contextos local-file.
-  // Se acepta solo si la petición viene del propio servidor por IP o host local.
-  if (origin === 'null') {
+
+  // Rechazar explícitamente "null" (usado por sandboxed iframes y data URIs de atacantes)
+  if (origin === 'null') return false;
+
+  // Si no hay Origin: permitido únicamente si el Host es estrictamente local (curl/scripts locales)
+  if (!origin) {
     const host = typeof req.get === 'function'
       ? req.get('host')
       : (req.headers && (req.headers.host || req.headers.Host));
-    return !host || host === `${HOST}:${PORT}` || host === `localhost:${PORT}` || host === `127.0.0.1:${PORT}`;
+    return Boolean(host && ALLOWED_HOSTS.has(host));
   }
-  return false;
+
+  return SELF_ORIGINS.has(origin);
 }
 
 const app = express();
@@ -78,12 +102,28 @@ const wss = new WebSocketServer({
   server,
   path: '/ws',
   verifyClient: (info, done) => {
-    const ok = isTrustedOrigin(info.req);
-    if (!ok) {
+    // 1. Validar Origin (debe ser origen confiable, rechaza 'null' y dominios externos)
+    const okOrigin = isTrustedOrigin(info.req);
+    if (!okOrigin) {
       const origin = info.req?.headers?.origin || 'sin origen';
       logSystem('error', `Origen WebSocket bloqueado: ${origin}`);
       return done(false, 403, 'Origen de WebSocket no permitido');
     }
+
+    // 2. Validar token de sesión en query string (?token=...) o header
+    let token = info.req?.headers?.['x-csrf-token'];
+    if (!token && info.req?.url) {
+      try {
+        const u = new URL(info.req.url, 'http://127.0.0.1');
+        token = u.searchParams.get('token');
+      } catch {}
+    }
+
+    if (!isValidToken(token)) {
+      logSystem('error', 'Handshake de WebSocket bloqueado: token de sesión ausente o no válido');
+      return done(false, 401, 'Token de sesión no válido');
+    }
+
     done(true);
   },
 });
@@ -95,17 +135,6 @@ try {
   app.use(compression());
 } catch {}
 app.use(express.json({ limit: '256kb' }));
-
-const ALLOWED_HOSTS = new Set([
-  `${HOST}:${PORT}`,
-  `127.0.0.1:${PORT}`,
-  `localhost:${PORT}`,
-  `[::1]:${PORT}`,
-  HOST,
-  '127.0.0.1',
-  'localhost',
-  '[::1]',
-]);
 
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -130,6 +159,7 @@ app.use((req, res, next) => {
   next();
 });
 
+// Protección contra CSRF en peticiones HTTP mutadoras (POST, PUT, DELETE, PATCH)
 app.use((req, res, next) => {
   if (SAFE_METHODS.has(req.method)) return next();
   if (!isTrustedOrigin(req)) {
@@ -139,7 +169,35 @@ app.use((req, res, next) => {
       code: 'BAD_ORIGIN',
     });
   }
+
+  const clientToken = req.get('x-csrf-token') || req.body?._csrf;
+  if (!isValidToken(clientToken)) {
+    logSystem('warn', `Petición mutadora rechazada: token CSRF ausente o no válido en ${req.method} ${req.path}`);
+    return res.status(403).json({
+      error: 'Token de sesión ausente o no válido',
+      code: 'BAD_CSRF_TOKEN',
+    });
+  }
   next();
+});
+
+// Servir index.html inyectando el token de sesión dinámico en la cabecera
+app.get(['/', '/index.html'], (req, res, next) => {
+  const indexPath = path.join(__dirname, 'public', 'index.html');
+  fs.readFile(indexPath, 'utf8', (err, html) => {
+    if (err) return next(err);
+    const withToken = html.replace(
+      '<meta name="csrf-token" content="">',
+      `<meta name="csrf-token" content="${SESSION_TOKEN}">`
+    );
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(withToken);
+  });
+});
+
+app.get('/api/csrf-token', (req, res) => {
+  if (!isTrustedOrigin(req)) return res.status(403).json({ error: 'Origen no permitido' });
+  res.json({ token: SESSION_TOKEN });
 });
 
 // Dependencias del frontend servidas desde node_modules (sin CDN)
@@ -452,6 +510,7 @@ function stopSession() {
   if (!session.pty) return;
   logSystem('info', 'Deteniendo sesión de airgeddon (Ctrl+C y confirmación de salida)...');
   const child = session.pty;
+  const childPid = child.pid;
   try { child.write('\x03'); } catch {}
   // Responder automáticamente al prompt de salida: "Detectada interrupción. ¿Quieres realmente salir del script? [Y/n]"
   setTimeout(() => {
@@ -469,10 +528,10 @@ function stopSession() {
       session.running = false;
       broadcast({ type: 'exit', code: 0 });
       broadcast({ type: 'session', session: sessionSnapshot() });
-      await sudoExec(['pkill', '-9', '-f', 'bash.*[/ ]airgeddon\\.sh'], { timeout: 3000 });
-      const targets = ['airodump-ng', 'aireplay-ng', 'mdk4', 'hostapd', 'dnsmasq', 'wash', 'reaver', 'bully'];
-      for (const target of targets) {
-        try { await sudoExec(['pkill', '-9', target], { timeout: 2000 }); } catch {}
+      if (childPid) {
+        // Detener exclusivamente los subprocesos hijos pertenecientes a esta sesión
+        try { await sudoExec(['pkill', '-9', '-P', String(childPid)], { timeout: 2000 }); } catch {}
+        try { await sudoExec(['kill', '-9', String(childPid)], { timeout: 2000 }); } catch {}
       }
     } catch {}
   }, 1200);
@@ -766,11 +825,15 @@ async function stopScan({ silent = false } = {}) {
   if (scan.timer) { clearInterval(scan.timer); scan.timer = null; }
   if (scan.proc) {
     scan.stopping = true;
-    try { scan.proc.kill('SIGINT'); } catch {}
     const proc = scan.proc;
+    const procPid = proc.pid;
+    try { proc.kill('SIGINT'); } catch {}
     setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 1800);
-    // Asegurar que airodump-ng ejecutado bajo sudo se detenga y no quede como proceso huérfano
-    try { await sudoExec(['pkill', '-2', 'airodump-ng'], { timeout: 2000 }); } catch {}
+    // Asegurar que solo el subproceso airodump-ng específico de este escaneo se detenga
+    if (procPid) {
+      try { await sudoExec(['pkill', '-2', '-P', String(procPid)], { timeout: 2000 }); } catch {}
+      try { await sudoExec(['kill', '-2', String(procPid)], { timeout: 2000 }); } catch {}
+    }
   }
   scan.proc = null;
   scan.running = false;
@@ -1041,7 +1104,21 @@ app.get('/api/sudo/status', async (req, res) => {
   });
 });
 
+let authAttempts = 0;
+let authLockedUntil = 0;
+
 app.post('/api/auth', async (req, res) => {
+  if (Date.now() < authLockedUntil) {
+    const remainingSec = Math.ceil((authLockedUntil - Date.now()) / 1000);
+    return res.status(429).json({
+      error: `Demasiados intentos fallidos. Inténtalo de nuevo en ${remainingSec} segundos.`,
+      code: 'AUTH_LOCKED',
+    });
+  }
+
+  // Retardo defensivo de 500 ms contra ataques de fuerza bruta y análisis de tiempos
+  await new Promise((r) => setTimeout(r, 500));
+
   const password = typeof req.body?.password === 'string' ? req.body.password : '';
   if (!password) return res.status(400).json({ error: 'Escribe tu contraseña' });
   if (password.length > 512 || password.includes('\n') || password.includes('\r')) {
@@ -1050,8 +1127,18 @@ app.post('/api/auth', async (req, res) => {
   const result = await sudoWithPassword(['-v'], password, { timeout: 10000 });
   if (result.ok) {
     sudoPassword = password;
+    authAttempts = 0;
+    authLockedUntil = 0;
     return res.json({ ok: true });
   }
+
+  authAttempts++;
+  if (authAttempts >= 5) {
+    authLockedUntil = Date.now() + 60000; // Bloqueo temporal de 60 segundos
+    authAttempts = 0;
+    logSystem('warn', 'Bloqueo temporal de autenticación activado tras 5 intentos fallidos');
+  }
+
   res.status(401).json({ error: cleanSudoError(result.stderr) || 'Contraseña incorrecta' });
 });
 
@@ -1257,6 +1344,11 @@ app.get('/api/system/updates', async (req, res) => {
 
 app.post('/api/system/updates/apply', async (req, res) => {
   try {
+    const passwordless = await sudoWorksWithoutPassword();
+    if (!passwordless && !sudoPassword) {
+      return res.status(401).json({ ok: false, error: 'Se requiere autenticación sudo para aplicar actualizaciones', code: 'AUTH_REQUIRED' });
+    }
+
     logSystem('info', 'Iniciando actualización de airgeddon GUI...');
     const pull = await execFileP('git', ['pull', '--rebase'], { cwd: __dirname, timeout: 30000 });
     if (!pull.ok) {
@@ -1270,7 +1362,11 @@ app.post('/api/system/updates/apply', async (req, res) => {
     logSystem('info', 'Actualizando dependencias con npm install...');
     const npmInst = await execFileP('npm', ['install', '--production'], { cwd: __dirname, timeout: 60000 });
     if (npmInst.stdout) logSystem('stdout', npmInst.stdout);
-    if (!npmInst.ok && npmInst.stderr) logSystem('warn', npmInst.stderr);
+    if (!npmInst.ok) {
+      const npmErr = npmInst.stderr || npmInst.stdout || 'Fallo desconocido en npm install';
+      logSystem('error', `Error en npm install: ${npmErr}`);
+      return res.status(500).json({ ok: false, error: `Error al instalar dependencias de npm: ${npmErr}` });
+    }
 
     logSystem('info', '¡Actualización completada con éxito!');
     res.json({ ok: true, message: 'Actualización aplicada correctamente.' });

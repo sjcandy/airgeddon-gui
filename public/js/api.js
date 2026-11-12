@@ -3,12 +3,25 @@
 window.AG = window.AG || {};
 
 AG.api = (() => {
+  function getCsrfToken() {
+    const meta = document.querySelector('meta[name="csrf-token"]');
+    return (meta && meta.getAttribute('content')) || '';
+  }
+
+  let cachedToken = getCsrfToken();
+
   async function request(method, url, body) {
+    if (!cachedToken) {
+      cachedToken = getCsrfToken();
+    }
     const opts = {
       method,
       headers: { Accept: 'application/json' },
       cache: 'no-store',
     };
+    if (cachedToken && method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
+      opts.headers['X-CSRF-Token'] = cachedToken;
+    }
     if (body !== undefined) {
       opts.headers['Content-Type'] = 'application/json';
       opts.body = JSON.stringify(body);
@@ -40,5 +53,6 @@ AG.api = (() => {
     get: (url) => request('GET', url),
     post: (url, body) => request('POST', url, body === undefined ? {} : body),
     put: (url, body) => request('PUT', url, body),
+    csrfToken: () => cachedToken || getCsrfToken(),
   };
 })();

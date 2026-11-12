@@ -38,6 +38,16 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - `airgeddon` se ejecuta siempre con `bash` (no `zsh`) para evitar errores con arrays asociativos.
 - El botón de tema se traslada exclusivamente a Configuración; la barra superior usa el color de acento.
 
+### Security
+- Token de sesión criptográfico efímero generado al arrancar, exigido en handshake WebSocket y peticiones REST mutadoras (`X-CSRF-Token`).
+- Rechazo estricto de `Origin: null` para mitigar ataques CSRF/CSWSH desde `iframe` sandboxed o URIs `data:`.
+- Limitador de tasa (*rate limit*) y retardo defensivo de 500 ms en `/api/auth` contra intentos de fuerza bruta sobre `sudo`.
+- Aislamiento en la terminación de procesos: se reemplaza el `pkill` global por señalización restringida al árbol de procesos hijo (`pkill -P`), evitando afectar procesos ajenos del sistema.
+- Sanitización en el buscador rápido: escape estricto de nombres de redes (SSID) y etiquetas contra inyección HTML/XSS.
+- Restauración selectiva de interfaces inalámbricas en `beforeunload`, limitándose únicamente a las interfaces puestas en modo monitor por esta GUI.
+- Validación del resultado de `npm install` en el actualizador (`/api/system/updates/apply`) para no reportar éxito si falla la instalación de paquetes.
+- Sincronización de versiones de metadatos entre `package.json` y `package-lock.json` (v2.0.0).
+
 ### Fixed
 - `sudo: zsh --login: command not found` — se usa la ruta completa y se separan los argumentos de `sudo`.
 - `airgeddon.sh:99 error de arrays asociativos` — se ejecuta con `bash`.

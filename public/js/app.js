@@ -53,6 +53,7 @@ AG.app = (() => {
     reconnectTimer: null,
     pendingSudo: null,
     booted: false,
+    managedMonitorInterfaces: new Set(),
   };
 
   let parseTimer = null;
@@ -231,8 +232,10 @@ AG.app = (() => {
   function connect() {
     if (state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)) return;
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const token = (window.AG && AG.api && typeof AG.api.csrfToken === 'function') ? AG.api.csrfToken() : '';
+    const wsUrl = `${proto}://${location.host}/ws${token ? `?token=${encodeURIComponent(token)}` : ''}`;
     let ws;
-    try { ws = new WebSocket(`${proto}://${location.host}/ws`); } catch { scheduleReconnect(); return; }
+    try { ws = new WebSocket(wsUrl); } catch { scheduleReconnect(); return; }
     state.ws = ws;
 
     ws.onopen = () => {
@@ -734,6 +737,7 @@ AG.app = (() => {
     if (iface.monitor) return iface.name;
 
     await AG.api.post('/api/interfaces/monitor', { name: iface.name, action: 'start' });
+    if (state.managedMonitorInterfaces) state.managedMonitorInterfaces.add(iface.name);
     const list = await AG.api.get('/api/interfaces');
     state.interfaces = Array.isArray(list) ? list : [];
     const mon = state.interfaces.find((i) => i.monitor);
@@ -815,6 +819,10 @@ AG.app = (() => {
       try {
         toast(op === 'start' ? 'Activando modo monitor…' : 'Volviendo a modo managed…', 'info');
         const res = await AG.api.post('/api/interfaces/monitor', { name, action: op });
+        if (state.managedMonitorInterfaces) {
+          if (op === 'start') state.managedMonitorInterfaces.add(name);
+          else state.managedMonitorInterfaces.delete(name);
+        }
         if (res && Array.isArray(res.interfaces)) state.interfaces = res.interfaces;
         else await refreshInterfaces();
         addEvent('action', op === 'start' ? `Modo monitor activado en ${name}` : `Modo managed en ${name}`, '');
@@ -1688,14 +1696,23 @@ AG.app = (() => {
             const nets = (state.scan.aps || []).filter(function(a) {
               return (a.essid || '').toLowerCase().includes(q) || (a.bssid || '').toLowerCase().includes(q);
             });
+            const esc = (window.AG && AG.ui && typeof AG.ui.esc === 'function')
+              ? AG.ui.esc
+              : function(s) {
+                  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+                };
             let results = '';
             if (cfgDefs.length) {
               results += '<div class="section-title">Configuración</div>';
-              results += cfgDefs.slice(0, 5).map(function(d) { return '<div class="search-result">' + d.label + ' (' + d.key + ')</div>'; }).join('');
+              results += cfgDefs.slice(0, 5).map(function(d) {
+                return '<div class="search-result">' + esc(d.label) + ' (' + esc(d.key) + ')</div>';
+              }).join('');
             }
             if (nets.length) {
               results += '<div class="section-title">Redes</div>';
-              results += nets.slice(0, 5).map(function(n) { return '<div class="search-result">' + n.essid + ' - ' + n.bssid + '</div>'; }).join('');
+              results += nets.slice(0, 5).map(function(n) {
+                return '<div class="search-result">' + esc(n.essid || 'Sin SSID') + ' - ' + esc(n.bssid) + '</div>';
+              }).join('');
             }
             if (!results) results = '<p style="color:var(--tx-3);font-size:11px">Sin resultados</p>';
             const body = h.el.querySelector('.modal-body');
@@ -1713,12 +1730,11 @@ AG.app = (() => {
     });
   }
 
-  // Restore interfaces on page close
+  // Restore interfaces on page close (solo aquellas gestionadas por esta sesión de la GUI)
   window.addEventListener('beforeunload', () => {
-    if (state.interfaces) {
-      const monInterfaces = state.interfaces.filter(function(i) { return i.monitor; });
-      for (const iface of monInterfaces) {
-        try { AG.api.post('/api/interfaces/monitor', { name: iface.name, action: 'stop' }); } catch {}
+    if (state.managedMonitorInterfaces && state.managedMonitorInterfaces.size > 0) {
+      for (const ifaceName of state.managedMonitorInterfaces) {
+        try { AG.api.post('/api/interfaces/monitor', { name: ifaceName, action: 'stop' }); } catch {}
       }
     }
   });

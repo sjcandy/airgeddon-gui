@@ -362,6 +362,14 @@ respuesta de vuelta a la PTY.**
 
 `Panel` · `Auditorías` · `Redes` · `Interfaces` · `Historial` · `Configuración` · `Diagnóstico`
 
+### 🔒 Modelo de seguridad y aislamiento
+
+- **Aplicación de escritorio monousuario:** Diseñada para uso interactivo en la sesión gráfica del usuario local (`127.0.0.1`). No es un daemon multi-tenant ni un servicio web expuesto a internet.
+- **Autenticación criptográfica estricta:** Todas las rutas REST sensibles y mutadoras requieren autenticación vía cabecera `X-CSRF-Token` con token aleatorio de 32 bytes (`crypto.randomBytes`) validado en tiempo constante (`timingSafeEqual`). No se admite paso de tokens en query strings de URLs (`?_token=`).
+- **WebSockets seguros:** Handshake exclusivo mediante subprotocolo `airgeddon-auth, <TOKEN>`, rechazando orígenes externos y conexiones sin token.
+- **Aislamiento de subprocesos y control de PGID:** Los escaneos con `airodump-ng` se lanzan desacoplados (`detached: true`) formando un grupo de procesos independiente. La rutina de terminación `killProcessTree()` valida estrictamente que jamás se transmitan señales de terminación (`SIGINT`/`SIGKILL`) al PID ni al PGID del propio servidor Node.js.
+- **Gestión temporal de credenciales con techo máximo:** La contraseña de `sudo` solo reside en memoria y está sujeta a un temporizador de inactividad de 15 minutos (reiniciado ante cada operación activa) y a un **límite máximo absoluto de 2 horas** (`SUDO_MAX_LIFETIME_MS`), tras el cual se purga de memoria y se invalida la sesión en el kernel con `sudo -k`.
+
 ---
 
 ## 🔄 Actualizaciones

@@ -1,7 +1,14 @@
 'use strict';
 
 /**
- * airgeddon GUI — servidor local
+ * airgeddon GUI — servidor local de escritorio monousuario
+ *
+ * Modelo de ejecución y seguridad:
+ * - Diseñado exclusivamente como estación de trabajo interactiva local monousuario (desktop).
+ * - Se ejecuta en la sesión gráfica del usuario (X11 / Wayland) ligada a loopback (127.0.0.1).
+ * - Requiere token de sesión efímero generado por ciclo de vida del proceso (X-CSRF-Token y subprotocolo WS).
+ * - Aislamiento de subprocesos por grupo de procesos (detached PGID) y protección del PID del servidor.
+ * - Credenciales sudo en memoria con temporizador de inactividad (15 min) y techo máximo absoluto (2 horas).
  *
  * - Sirve la interfaz (public/)
  * - Puente PTY <-> WebSocket para airgeddon.sh
@@ -201,7 +208,7 @@ app.use((req, res, next) => {
       });
     }
 
-    const clientToken = req.get('x-csrf-token') || req.query?._token || req.body?._csrf;
+    const clientToken = req.get('x-csrf-token') || req.body?._csrf;
     if (!isValidToken(clientToken)) {
       logSystem('warn', `Petición rechazada: token de sesión ausente o no válido en ${req.method} ${req.path}`);
       return res.status(403).json({
@@ -537,15 +544,19 @@ async function startSession({ cols = 120, rows = 40 } = {}) {
 
 /**
  * Termina de forma atómica y recursiva un proceso, su grupo de procesos (PGID)
- * y toda su descendencia de subprocesos para neutralizar condiciones de carrera.
+ * y toda su descendencia de subprocesos, verificando que NO pertenezca al servidor Node.js.
  */
 async function killProcessTree(rootPid, signal = '-9') {
   if (!rootPid) return;
-  // 1. Obtener y señalizar atómicamente el grupo de procesos (PGID) en el kernel
+  const serverPgid = typeof process.getpgrp === 'function' ? String(process.getpgrp()) : '';
+  const serverPid = String(process.pid);
+
+  // 1. Obtener y señalizar atómicamente el grupo de procesos (PGID) en el kernel,
+  // verificando estrictamente que NO coincida con el PGID ni PID del servidor Node.js
   try {
     const pgRes = await sudoExec(['ps', '-o', 'pgid=', '-p', String(rootPid)]);
     const pgid = pgRes.ok && pgRes.stdout ? pgRes.stdout.trim().split(/\s+/)[0] : '';
-    if (pgid && pgid !== '0' && pgid !== '1') {
+    if (pgid && pgid !== '0' && pgid !== '1' && pgid !== serverPgid && pgid !== serverPid) {
       await sudoExec(['kill', signal, `-${pgid}`]);
     }
   } catch {}
@@ -556,15 +567,19 @@ async function killProcessTree(rootPid, signal = '-9') {
     if (res.ok && res.stdout) {
       const childPids = res.stdout.trim().split(/\s+/).filter(Boolean);
       for (const cpid of childPids) {
-        await killProcessTree(cpid, signal);
+        if (cpid !== serverPid && cpid !== serverPgid) {
+          await killProcessTree(cpid, signal);
+        }
       }
     }
   } catch {}
 
-  // 3. Asegurar la terminación del proceso raíz
-  try {
-    await sudoExec(['kill', signal, String(rootPid)]);
-  } catch {}
+  // 3. Asegurar la terminación del proceso raíz (si no es el servidor)
+  if (String(rootPid) !== serverPid && String(rootPid) !== serverPgid) {
+    try {
+      await sudoExec(['kill', signal, String(rootPid)]);
+    } catch {}
+  }
 }
 
 function stopSession() {
@@ -811,6 +826,7 @@ async function startScan(iface, band = 'abg') {
   const child = spawn('sudo', args, {
     env: { ...process.env, LANG: process.env.LANG || 'es_MX.UTF-8' },
     stdio: ['pipe', 'pipe', 'pipe'],
+    detached: true,
   });
   scan.proc = child;
   scan.running = true;
@@ -1166,21 +1182,24 @@ app.get('/api/sudo/status', async (req, res) => {
 
 const authAttemptsByIp = new Map();
 let sudoInactivityTimer = null;
-const SUDO_INACTIVITY_MS = 15 * 60 * 1000; // 15 minutos
+const SUDO_INACTIVITY_MS = 15 * 60 * 1000; // 15 minutos de inactividad
+const SUDO_MAX_LIFETIME_MS = 120 * 60 * 1000; // 2 horas límite máximo absoluto
+let sudoAuthenticatedAt = 0;
 
 function resetSudoInactivityTimer() {
   if (sudoInactivityTimer) clearTimeout(sudoInactivityTimer);
   sudoInactivityTimer = setTimeout(() => {
-    // Si hay una sesión activa de airgeddon o un escaneo en curso, posponer el bloqueo
-    // para no interrumpir operaciones de auditoría largas en progreso
-    if (session.running || scan.running) {
+    // Si la sesión excede el límite máximo absoluto (2 horas), forzar bloqueo
+    const elapsed = Date.now() - sudoAuthenticatedAt;
+    if (elapsed < SUDO_MAX_LIFETIME_MS && (session.running || scan.running)) {
       resetSudoInactivityTimer();
       return;
     }
     if (sudoPassword) {
       sudoPassword = null;
+      sudoAuthenticatedAt = 0;
       execFileP('sudo', ['-k']).catch(() => {});
-      logSystem('info', 'Sesión de sudo bloqueada automáticamente por inactividad (15 min sin operaciones)');
+      logSystem('info', 'Sesión de sudo bloqueada automáticamente por límite de tiempo o inactividad');
     }
   }, SUDO_INACTIVITY_MS);
 }
@@ -1217,6 +1236,7 @@ app.post('/api/auth', async (req, res) => {
   const result = await sudoWithPassword(['-v'], password, { timeout: 10000 });
   if (result.ok) {
     sudoPassword = password;
+    sudoAuthenticatedAt = Date.now();
     rec.attempts = 0;
     rec.lockedUntil = 0;
     resetSudoInactivityTimer();
@@ -1235,6 +1255,7 @@ app.post('/api/auth', async (req, res) => {
 
 app.post('/api/lock', async (req, res) => {
   sudoPassword = null;
+  sudoAuthenticatedAt = 0;
   if (sudoInactivityTimer) {
     clearTimeout(sudoInactivityTimer);
     sudoInactivityTimer = null;

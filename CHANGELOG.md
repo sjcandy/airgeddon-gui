@@ -39,6 +39,10 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - El botón de tema se traslada exclusivamente a Configuración; la barra superior usa el color de acento.
 
 ### Security
+- Aislamiento estricto de grupos de procesos (PGID): `startScan` inicia subprocesos con `detached: true` conformando un PGID independiente, y `killProcessTree` valida exhaustivamente que jamás se envíen señales de terminación (`SIGINT`/`SIGKILL`) al PID o PGID del servidor Node.js.
+- Límite máximo absoluto de retención de credenciales `sudo` en memoria (`SUDO_MAX_LIFETIME_MS = 2 horas`): purga de credenciales e invalidación de sesión en kernel vía `sudo -k` ante operaciones excesivamente prolongadas o abandonadas.
+- Eliminación de autenticación por parámetro query en URLs (`req.query?._token`), forzando exclusivamente la cabecera `X-CSRF-Token` o cuerpo HTTP en peticiones REST.
+- Documentación del modelo de seguridad y alcance: formalización de la suite como herramienta de escritorio monousuario interactiva ligada a loopback, con aislamiento criptográfico efímero por ciclo de vida.
 - Eliminación del endpoint `/api/csrf-token` no autenticado; la única ruta pública es `/api/health`.
 - Señalización atómica a nivel de grupo de procesos (`kill -<sig> -<pgid>`) combinada con recursión en `killProcessTree` para neutralizar condiciones de carrera y procesos huérfanos.
 - Temporizador sudo resiliente a auditorías largas: se pospone automáticamente mientras haya una sesión (`session.running`) o escaneo (`scan.running`) activo.

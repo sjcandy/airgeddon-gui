@@ -128,7 +128,8 @@ const wss = new WebSocketServer({
       return done(false, 403, 'Origen de WebSocket no permitido');
     }
 
-    // 3. Validar token de sesión en subprotocolo ('airgeddon-auth', '<TOKEN>'), header o query string
+    // 3. Validar token de sesión EXCLUSIVAMENTE mediante subprotocolo seguro ('airgeddon-auth', '<TOKEN>')
+    // o cabecera X-CSRF-Token (nunca por URL / query string para evitar filtración en logs)
     let token = info.req?.headers?.['x-csrf-token'];
     const subprotocol = info.req?.headers?.['sec-websocket-protocol'];
     if (!token && subprotocol) {
@@ -137,12 +138,6 @@ const wss = new WebSocketServer({
       if (authIdx !== -1 && parts[authIdx + 1]) {
         token = parts[authIdx + 1];
       }
-    }
-    if (!token && info.req?.url) {
-      try {
-        const u = new URL(info.req.url, 'http://127.0.0.1');
-        token = u.searchParams.get('token');
-      } catch {}
     }
 
     if (!isValidToken(token)) {
@@ -185,23 +180,19 @@ app.use((req, res, next) => {
   next();
 });
 
-// Rutas GET que entregan información privada del sistema, redes o credenciales
-const SENSITIVE_GET_PATHS = new Set([
-  '/api/info',
-  '/api/diagnostics',
-  '/api/captures',
-  '/api/config/raw',
-  '/api/system/updates',
-  '/api/interfaces',
-  '/api/sudo/status',
-]);
+// Rutas públicas que no requieren token (solo comprobación básica de salud y handshake)
+const PUBLIC_API_PATHS = new Set(['/api/health', '/api/csrf-token']);
 
-// Protección contra CSRF en peticiones HTTP mutadoras y protección de datos privados en GET
+// Protección contra CSRF en peticiones HTTP mutadoras y protección estricta de todos los endpoints de API
 app.use((req, res, next) => {
-  const isSensitiveGet = req.method === 'GET' && SENSITIVE_GET_PATHS.has(req.path);
+  // Normalizar la ruta a minúsculas y sin barras finales para evitar bypasses (ej: /api/captures/, /API/CAPTURES)
+  const normalizedPath = (req.path || '').toLowerCase().replace(/\/+$/, '') || '/';
+  const isApi = normalizedPath.startsWith('/api');
+  const isPublicApi = PUBLIC_API_PATHS.has(normalizedPath);
   const isMutating = !SAFE_METHODS.has(req.method);
 
-  if (isMutating || isSensitiveGet) {
+  // Todo /api (excepto /api/health y /api/csrf-token) y todos los métodos mutadores exigen autenticación con token
+  if (isMutating || (isApi && !isPublicApi)) {
     if (!isTrustedOrigin(req)) {
       logSystem('error', `Origen bloqueado: ${req.method} ${req.path} (Origin: ${req.get('origin') || 'sin origen'})`);
       return res.status(403).json({
@@ -222,7 +213,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// Servir index.html inyectando el token de sesión dinámico en la cabecera
+// Servir index.html inyectando el token de sesión dinámico en la cabecera y configurando cookie HttpOnly SameSite=Strict
 app.get(['/', '/index.html'], (req, res, next) => {
   const indexPath = path.join(__dirname, 'public', 'index.html');
   fs.readFile(indexPath, 'utf8', (err, html) => {
@@ -231,6 +222,7 @@ app.get(['/', '/index.html'], (req, res, next) => {
       '<meta name="csrf-token" content="">',
       `<meta name="csrf-token" content="${SESSION_TOKEN}">`
     );
+    res.setHeader('Set-Cookie', `ag_session=${SESSION_TOKEN}; Path=/; HttpOnly; SameSite=Strict`);
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.send(withToken);
   });
@@ -374,6 +366,7 @@ async function sudoExec(args, opts = {}) {
   logSystem('cmd', cmdStr);
   let result;
   if (sudoPassword) {
+    if (typeof resetSudoInactivityTimer === 'function') resetSudoInactivityTimer();
     result = await sudoWithPassword(args, sudoPassword, opts);
   } else if (await sudoWorksWithoutPassword()) {
     result = await execFileP('sudo', ['-n', ...args], opts);
@@ -547,6 +540,23 @@ async function startSession({ cols = 120, rows = 40 } = {}) {
   return sessionSnapshot();
 }
 
+/** Termina recursivamente un proceso y toda su descendencia de subprocesos. */
+async function killProcessTree(rootPid, signal = '-9') {
+  if (!rootPid) return;
+  try {
+    const res = await sudoExec(['pgrep', '-P', String(rootPid)]);
+    if (res.ok && res.stdout) {
+      const childPids = res.stdout.trim().split(/\s+/).filter(Boolean);
+      for (const cpid of childPids) {
+        await killProcessTree(cpid, signal);
+      }
+    }
+  } catch {}
+  try {
+    await sudoExec(['kill', signal, String(rootPid)]);
+  } catch {}
+}
+
 function stopSession() {
   if (!session.pty) return;
   logSystem('info', 'Deteniendo sesión de airgeddon (Ctrl+C y confirmación de salida)...');
@@ -570,9 +580,8 @@ function stopSession() {
       broadcast({ type: 'exit', code: 0 });
       broadcast({ type: 'session', session: sessionSnapshot() });
       if (childPid) {
-        // Detener exclusivamente los subprocesos hijos pertenecientes a esta sesión
-        try { await sudoExec(['pkill', '-9', '-P', String(childPid)], { timeout: 2000 }); } catch {}
-        try { await sudoExec(['kill', '-9', String(childPid)], { timeout: 2000 }); } catch {}
+        // Detener recursivamente todo el árbol de subprocesos pertenecientes a esta sesión
+        await killProcessTree(childPid, '-9');
       }
     } catch {}
   }, 1200);
@@ -870,10 +879,10 @@ async function stopScan({ silent = false } = {}) {
     const procPid = proc.pid;
     try { proc.kill('SIGINT'); } catch {}
     setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 1800);
-    // Asegurar que solo el subproceso airodump-ng específico de este escaneo se detenga
+    // Asegurar que el subproceso airodump-ng y toda su descendencia se detengan
     if (procPid) {
-      try { await sudoExec(['pkill', '-2', '-P', String(procPid)], { timeout: 2000 }); } catch {}
-      try { await sudoExec(['kill', '-2', String(procPid)], { timeout: 2000 }); } catch {}
+      await killProcessTree(procPid, '-2');
+      setTimeout(() => { killProcessTree(procPid, '-9').catch(() => {}); }, 1500);
     }
   }
   scan.proc = null;
@@ -1458,6 +1467,7 @@ wss.on('connection', async (ws, req) => {
     if (!msg || typeof msg.type !== 'string') return;
 
     if (msg.type === 'start') {
+      resetSudoInactivityTimer();
       try {
         await startSession({ cols: msg.cols, rows: msg.rows });
         send(ws, { type: 'started', startedAt: session.startedAt });
@@ -1470,6 +1480,7 @@ wss.on('connection', async (ws, req) => {
     if (msg.type === 'input') {
       if (!session.running || !session.pty) return;
       if (typeof msg.data !== 'string' || msg.data.length > 20000) return;
+      resetSudoInactivityTimer();
       try { session.pty.write(msg.data); } catch {}
       return;
     }

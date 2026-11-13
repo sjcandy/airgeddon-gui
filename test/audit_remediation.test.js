@@ -12,6 +12,7 @@ const {
   LOCAL_AUTH_SECRET,
   isLocalAuthorized,
   isOfficialRemote,
+  initLocalAuthSecretFile,
 } = require('../server.js');
 
 const { sanitizeCsvCell } = require('../public/js/app.js');
@@ -91,9 +92,10 @@ test('[VULN-01] GET / con credencial local manipulada o incorrecta es rechazada 
   );
 });
 
-test('[VULN-01] Archivo de sesión local session.auth existe con permisos estrictos de usuario (0600)', () => {
-  const configDir = path.join(require('node:os').homedir(), '.config', 'airgeddon-gui');
-  const authFile = path.join(configDir, 'session.auth');
+test('[VULN-01] Archivo de sesión local session.auth existe con permisos estrictos de usuario (0600)', (t) => {
+  const configDir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'ag-auth-test-'));
+  t.after(() => fs.rmSync(configDir, { recursive: true, force: true }));
+  const authFile = initLocalAuthSecretFile(configDir);
 
   assert.ok(fs.existsSync(authFile), 'El archivo session.auth debe existir en ~/.config/airgeddon-gui/');
   const stat = fs.statSync(authFile);
@@ -161,7 +163,7 @@ test('[VULN-01] Peticiones mutadoras sin token de sesión CSRF son rechazadas co
     headers: {
       Host: '127.0.0.1',
       'Content-Type': 'application/json',
-      Origin: `http://127.0.0.1:3845`,
+      Origin: `http://127.0.0.1:${testPort}`,
     },
     body: JSON.stringify({ password: 'test' }),
   });
@@ -299,7 +301,7 @@ test('[VULN-04] POST /api/system/updates/apply exige confirmación explícita (c
     headers: {
       Host: '127.0.0.1',
       'Content-Type': 'application/json',
-      Origin: `http://127.0.0.1:3845`,
+      Origin: `http://127.0.0.1:${testPort}`,
       'X-CSRF-Token': SESSION_TOKEN,
     },
     body: JSON.stringify({}),

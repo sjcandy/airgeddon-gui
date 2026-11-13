@@ -140,20 +140,39 @@ function isValidToken(token) {
 // accesible únicamente por el usuario propietario del proceso.
 const LOCAL_AUTH_SECRET = crypto.randomBytes(32).toString('hex');
 
-function initLocalAuthSecretFile() {
+function initLocalAuthSecretFile(configDir = path.join(os.homedir(), '.config', 'airgeddon-gui')) {
+  fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
+  const dir = fs.lstatSync(configDir);
+  const owned = (st) => typeof process.getuid !== 'function' || st.uid === process.getuid();
+  if (!dir.isDirectory() || dir.isSymbolicLink() || !owned(dir)) {
+    throw new Error('Directorio de autenticación inseguro');
+  }
+  fs.chmodSync(configDir, 0o700);
+  const authFile = path.join(configDir, 'session.auth');
   try {
-    const configDir = path.join(os.homedir(), '.config', 'airgeddon-gui');
-    if (!fs.existsSync(configDir)) {
-      fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
-    } else {
-      try { fs.chmodSync(configDir, 0o700); } catch {}
+    const existing = fs.lstatSync(authFile);
+    if (!existing.isFile() || existing.isSymbolicLink() || existing.nlink !== 1 || !owned(existing)) {
+      throw new Error('Archivo de autenticación inseguro');
     }
-    const authFile = path.join(configDir, 'session.auth');
-    fs.writeFileSync(authFile, LOCAL_AUTH_SECRET, { mode: 0o600, encoding: 'utf8' });
-    try { fs.chmodSync(authFile, 0o600); } catch {}
-  } catch {}
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  }
+  const temporary = path.join(configDir, `.session.auth.${crypto.randomBytes(12).toString('hex')}`);
+  let fd;
+  try {
+    fd = fs.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT |
+      fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
+    fs.writeFileSync(fd, LOCAL_AUTH_SECRET, 'utf8');
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = undefined;
+    fs.renameSync(temporary, authFile);
+    return authFile;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+    try { fs.unlinkSync(temporary); } catch (err) { if (err.code !== 'ENOENT') throw err; }
+  }
 }
-initLocalAuthSecretFile();
 
 /** Devuelve una identidad binaria para direcciones loopback; otras fallan cerradas. */
 function loopbackAddressKey(address) {
@@ -253,14 +272,6 @@ function isLocalAuthorized(req) {
 // se exige que las peticiones mutadoras y conexiones WS provengan del propio
 // servidor y presenten el token de sesión legítimo.
 
-const SELF_ORIGINS = new Set([
-  `http://${HOST}:${PORT}`,
-  `http://localhost:${PORT}`,
-  `http://127.0.0.1:${PORT}`,
-  `https://${HOST}:${PORT}`,
-  `https://localhost:${PORT}`,
-  `https://127.0.0.1:${PORT}`,
-]);
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 const ALLOWED_HOSTS = new Set([
@@ -298,8 +309,11 @@ function isTrustedOrigin(req) {
     return Boolean(host && isAllowedHost(host));
   }
 
-  if (SELF_ORIGINS.has(origin)) return true;
-  return /^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/.test(origin);
+  // El puerto forma parte del origen; otro servicio local no es este servidor.
+  const port = req.socket?.localPort || server.address()?.port || PORT;
+  return ['localhost', '127.0.0.1', '[::1]'].some((host) =>
+    origin === new URL(`http://${host}:${port}`).origin
+  );
 }
 
 const app = express();
@@ -375,7 +389,8 @@ app.use((req, res, next) => {
   );
 
   // Cabecera Cache-Control: no-store para prevenir almacenamiento en caché de respuestas sensibles (VULN-01)
-  if (req.path.startsWith('/api') || req.path === '/' || req.path === '/index.html') {
+  const cachePath = (req.path || '').toLowerCase();
+  if (cachePath.startsWith('/api') || cachePath === '/' || cachePath === '/index.html') {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
@@ -687,6 +702,25 @@ function redactUrlCredentials(url) {
     .replace(/(\/\/)([^/@:\s]+)@/, '$1••••••@');
 }
 
+/** Espera la sesión POSIX de la PTY: spawn puede volver antes de setsid(). */
+async function waitForIsolatedPgid(pid, {
+  timeoutMs = 2000,
+  readPgid = getProcessPgid,
+  alive = isProcessAlive,
+} = {}) {
+  const expected = String(pid);
+  const deadline = Date.now() + timeoutMs;
+  do {
+    const pgid = readPgid(pid);
+    if (pgid === expected && pgid !== SERVER_PGID && pgid !== SERVER_PID) return pgid;
+    if (!alive(pid)) break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  } while (Date.now() < deadline);
+  const err = new Error('No se pudo confirmar el aislamiento de la terminal');
+  err.code = 'PTY_ISOLATION_FAILED';
+  throw err;
+}
+
 async function startSession({ cols = 120, rows = 40 } = {}) {
   if (session.running || session.starting || sessionStartingPromise) {
     const err = new Error('Ya hay una sesión de airgeddon en ejecución o en proceso de inicio');
@@ -757,21 +791,9 @@ async function startSession({ cols = 120, rows = 40 } = {}) {
       child.generation = currentGen;
       session.pty = child;
       session.pid = child.pid;
-      session.pgid = getProcessPgid(child.pid) || String(child.pid);
-      session.running = true;
-      session.startedAt = Date.now();
-
-      if (!passwordless && sudoPassword) {
-        // sudo -k fuerza el prompt, así la contraseña siempre es consumida por sudo
-        // y nunca llega al stdin de airgeddon.
-        setTimeout(() => {
-          try {
-            if (session.generation === currentGen && session.pty === child) {
-              child.write(`${sudoPassword}\n`);
-            }
-          } catch {}
-        }, 180);
-      }
+      session.pgid = null;
+      session.running = false;
+      session.startedAt = null;
 
       child.onData((data) => {
         if (session.generation !== currentGen) return;
@@ -792,6 +814,40 @@ async function startSession({ cols = 120, rows = 40 } = {}) {
           broadcast({ type: 'session', session: sessionSnapshot() });
         }
       });
+
+      try {
+        const pgid = await waitForIsolatedPgid(child.pid);
+        if (session.generation !== currentGen || session.pty !== child || child._stopping) {
+          const err = new Error('El inicio de sesión fue cancelado');
+          err.code = 'SESSION_SUPERSEDED';
+          throw err;
+        }
+        session.pgid = pgid;
+        session.running = true;
+        session.startedAt = Date.now();
+      } catch (err) {
+        await killProcessTree(child.pid, '-9');
+        try { child.kill('SIGKILL'); } catch {}
+        if (session.generation === currentGen && session.pty === child) {
+          session.pty = null;
+          session.pid = null;
+          session.pgid = null;
+          session.running = false;
+        }
+        throw err;
+      }
+
+      if (!passwordless && sudoPassword) {
+        // sudo -k fuerza el prompt, así la contraseña siempre es consumida por sudo
+        // y nunca llega al stdin de airgeddon.
+        setTimeout(() => {
+          try {
+            if (session.generation === currentGen && session.pty === child) {
+              child.write(`${sudoPassword}\n`);
+            }
+          } catch {}
+        }, 180);
+      }
 
       logSystem('cmd', 'sudo bash airgeddon.sh');
       logSystem('info', `Sesión de airgeddon iniciada en terminal PTY (${session.cols}x${session.rows})`);
@@ -1984,6 +2040,29 @@ app.get('/api/system/updates', async (req, res) => {
   }
 });
 
+/** Instalación repetible: cualquier fallo exige reparación antes de reiniciar. */
+async function installUpdateDependencies({ cwd = __dirname, run = execFileP } = {}) {
+  if (!fs.existsSync(path.join(cwd, 'package-lock.json'))) {
+    const err = new Error('Falta el archivo de dependencias bloqueadas; reinstala desde una copia oficial completa.');
+    err.code = 'UPDATE_LOCKFILE_REQUIRED';
+    throw err;
+  }
+  const steps = [
+    ['npm', ['ci', '--omit=dev', '--ignore-scripts'], 'UPDATE_DEPENDENCIES_FAILED'],
+    ['npm', ['rebuild', 'node-pty'], 'UPDATE_REBUILD_FAILED'],
+    [process.execPath, ['-e', "require('node-pty')"], 'UPDATE_NATIVE_CHECK_FAILED'],
+  ];
+  for (const [command, args, code] of steps) {
+    const result = await run(command, args, { cwd, timeout: 60000 });
+    if (!result.ok) {
+      logSystem('error', redact(redactUrlCredentials(result.stderr || result.stdout || code)));
+      const err = new Error('La instalación de componentes quedó incompleta. Reintenta la actualización antes de reiniciar; si persiste, reinstala desde la versión oficial.');
+      err.code = code;
+      throw err;
+    }
+  }
+}
+
 app.post('/api/system/updates/apply', async (req, res) => {
   try {
     if (!req.body || req.body.confirmed !== true) {
@@ -2038,30 +2117,13 @@ app.post('/api/system/updates/apply', async (req, res) => {
     const cleanOut = redact(redactUrlCredentials(merge.stdout || 'Código actualizado'));
     logSystem('stdout', cleanOut);
 
-    // Instalación controlada y reproducible omitiendo scripts de terceros (VULN-04)
-    logSystem('info', 'Actualizando dependencias de forma reproducible y segura...');
-    const hasLockfile = fs.existsSync(path.join(__dirname, 'package-lock.json'));
-    const installArgs = hasLockfile
-      ? ['ci', '--omit=dev', '--ignore-scripts']
-      : ['install', '--omit=dev', '--ignore-scripts'];
-
-    const npmInst = await execFileP('npm', installArgs, { cwd: __dirname, timeout: 60000 });
-    if (npmInst.stdout) logSystem('stdout', npmInst.stdout);
-    if (!npmInst.ok) {
-      const npmErr = npmInst.stderr || npmInst.stdout || 'Fallo desconocido en npm';
-      logSystem('error', `Error en instalación de dependencias: ${npmErr}`);
-      return res.status(500).json({ ok: false, error: `Error en dependencias de npm: ${npmErr}` });
-    }
-
-    // Recompilar explícitamente solo la dependencia nativa autorizada (node-pty)
-    logSystem('info', 'Recompilando módulo nativo autorizado node-pty...');
-    await execFileP('npm', ['rebuild', 'node-pty'], { cwd: __dirname, timeout: 60000 });
+    await installUpdateDependencies();
 
     logSystem('info', '¡Actualización verificada completada con éxito!');
     res.json({ ok: true, message: 'Actualización aplicada correctamente.' });
   } catch (err) {
     logSystem('error', `Fallo de actualización: ${err.message}`);
-    res.status(500).json({ ok: false, error: err.message });
+    res.status(500).json({ ok: false, error: err.message, code: err.code || 'UPDATE_FAILED' });
   }
 });
 
@@ -2241,6 +2303,12 @@ async function shutdown({
 }
 
 if (require.main === module) {
+  try {
+    initLocalAuthSecretFile();
+  } catch (err) {
+    console.error(`[ERROR] No se pudo preparar la autenticación local: ${err.message}`);
+    process.exit(1);
+  }
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 
@@ -2266,6 +2334,7 @@ module.exports = {
   startScan,
   stopScan,
   startSession,
+  waitForIsolatedPgid,
   stopSession,
   scan,
   session,
@@ -2276,6 +2345,8 @@ module.exports = {
   isLocalAuthorized,
   getSocketOwnerUid,
   isOfficialRemote,
+  isTrustedOrigin,
+  installUpdateDependencies,
   initLocalAuthSecretFile,
   shutdown,
   resetSudoInactivityTimer,

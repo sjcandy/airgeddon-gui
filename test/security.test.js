@@ -36,6 +36,7 @@ const {
   SERVER_PGID,
   killProcessTree,
   startSession,
+  waitForIsolatedPgid,
   stopSession,
   startScan,
   stopScan,
@@ -75,7 +76,7 @@ test('[INTEGRACIÓN REAL] El PGID objetivo es distinto del PGID del servidor', a
     rows: 24,
   });
   assert.ok(ptyChild.pid, 'El proceso PTY debe tener PID válido');
-  const ptyPgid = getProcessPgid(ptyChild.pid);
+  const ptyPgid = await waitForIsolatedPgid(ptyChild.pid);
   assert.ok(ptyPgid, 'El proceso PTY debe tener PGID');
   assert.notEqual(ptyPgid, serverPgid, 'El PGID de la sesión PTY debe ser independiente del servidor');
   assert.notEqual(ptyPgid, String(process.pid), 'El PGID de la sesión PTY no debe ser el PID del servidor');
@@ -621,8 +622,8 @@ test('[CONCURRENCIA] Peticiones concurrentes a /api/auth no eluden la tasa de bl
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              Host: '127.0.0.1:3845',
-              Origin: 'http://127.0.0.1:3845',
+              Host: `127.0.0.1:${port}`,
+              Origin: `http://127.0.0.1:${port}`,
               'x-csrf-token': SESSION_TOKEN,
             },
           },
@@ -655,4 +656,23 @@ test('[CONCURRENCIA] Peticiones concurrentes a /api/auth no eluden la tasa de bl
   } finally {
     await new Promise((resolve) => testServer.close(resolve));
   }
+});
+
+
+test('[ARRANQUE PTY] Espera la transición del grupo heredado a la sesión aislada', async () => {
+  const target = 987654321;
+  let reads = 0;
+  const result = await waitForIsolatedPgid(target, {
+    timeoutMs: 100,
+    readPgid: () => ++reads < 3 ? SERVER_PGID : String(target),
+    alive: () => true,
+  });
+  assert.equal(result, String(target));
+  assert.equal(reads, 3);
+});
+
+test('[ARRANQUE PTY] Un proceso sin aislamiento falla de forma explícita', async () => {
+  await assert.rejects(waitForIsolatedPgid(987654321, {
+    timeoutMs: 20, readPgid: () => SERVER_PGID, alive: () => true,
+  }), { code: 'PTY_ISOLATION_FAILED' });
 });

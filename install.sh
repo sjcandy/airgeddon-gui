@@ -53,10 +53,8 @@ if ! command -v node &> /dev/null; then
         if [ "$PKG_MANAGER" = "pacman" ]; then
             sudo pacman -S --needed nodejs npm
         elif [ "$PKG_MANAGER" = "apt" ]; then
-            echo -e "${BLUE}[*] Configurando repositorios APT para Debian / Kali / Ubuntu...${NC}"
-            sudo apt update && sudo apt install -y curl ca-certificates gnupg build-essential
-            curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-            sudo apt install -y nodejs
+            echo -e "${BLUE}[*] Instalando Node.js, npm y herramientas de compilación desde repositorios oficiales...${NC}"
+            sudo apt update && sudo apt install -y nodejs npm build-essential
         elif [ "$PKG_MANAGER" = "dnf" ]; then
             sudo dnf install -y nodejs npm
         else

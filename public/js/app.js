@@ -233,9 +233,11 @@ AG.app = (() => {
     if (state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)) return;
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const token = (window.AG && AG.api && typeof AG.api.csrfToken === 'function') ? AG.api.csrfToken() : '';
-    const wsUrl = `${proto}://${location.host}/ws${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+    const wsUrl = `${proto}://${location.host}/ws`;
     let ws;
-    try { ws = new WebSocket(wsUrl); } catch { scheduleReconnect(); return; }
+    try {
+      ws = token ? new WebSocket(wsUrl, ['airgeddon-auth', token]) : new WebSocket(wsUrl);
+    } catch { scheduleReconnect(); return; }
     state.ws = ws;
 
     ws.onopen = () => {

@@ -19,7 +19,7 @@ AG.api = (() => {
       headers: { Accept: 'application/json' },
       cache: 'no-store',
     };
-    if (cachedToken && method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
+    if (cachedToken) {
       opts.headers['X-CSRF-Token'] = cachedToken;
     }
     if (body !== undefined) {

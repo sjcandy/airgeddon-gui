@@ -26,7 +26,15 @@ const pty = require('node-pty');
 // ─────────────────────────────────────────────────────────────────────────────
 
 const PORT = Number(process.env.PORT || 3845);
-const HOST = process.env.HOST || '127.0.0.1';
+// airgeddon GUI es una aplicación de escritorio local. Para garantizar la seguridad
+// del sistema y de la terminal interactiva con privilegios root, el servidor se
+// vincula exclusivamente a interfaces loopback locales (127.0.0.1 / localhost).
+const RAW_HOST = process.env.HOST || '127.0.0.1';
+const ALLOWED_LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+const HOST = ALLOWED_LOOPBACK_HOSTS.has(RAW_HOST) ? RAW_HOST : '127.0.0.1';
+if (RAW_HOST !== HOST) {
+  console.warn(`[!] Advertencia de seguridad: Se ignoró el host no seguro '${RAW_HOST}'. Forzando escucha en loopback ${HOST}.`);
+}
 const AIRGEDDON_DIR = process.env.AIRGEDDON_DIR || path.join(__dirname, '..', 'airgeddon');
 const AIRGEDDON_SCRIPT = path.join(AIRGEDDON_DIR, 'airgeddon.sh');
 const AIRGEDDONRC = path.join(AIRGEDDON_DIR, '.airgeddonrc');
@@ -101,8 +109,18 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({
   server,
   path: '/ws',
+  handleProtocols: (protocols) => {
+    if (protocols.has('airgeddon-auth')) return 'airgeddon-auth';
+    return false;
+  },
   verifyClient: (info, done) => {
-    // 1. Validar Origin (debe ser origen confiable, rechaza 'null' y dominios externos)
+    // 1. Limitar conexiones simultáneas para prevenir DoS
+    if (wss.clients.size >= 5) {
+      logSystem('warn', 'Conexión WebSocket rechazada: límite de conexiones simultáneas alcanzado');
+      return done(false, 429, 'Demasiadas conexiones simultáneas');
+    }
+
+    // 2. Validar Origin (debe ser origen confiable, rechaza 'null' y dominios externos)
     const okOrigin = isTrustedOrigin(info.req);
     if (!okOrigin) {
       const origin = info.req?.headers?.origin || 'sin origen';
@@ -110,8 +128,16 @@ const wss = new WebSocketServer({
       return done(false, 403, 'Origen de WebSocket no permitido');
     }
 
-    // 2. Validar token de sesión en query string (?token=...) o header
+    // 3. Validar token de sesión en subprotocolo ('airgeddon-auth', '<TOKEN>'), header o query string
     let token = info.req?.headers?.['x-csrf-token'];
+    const subprotocol = info.req?.headers?.['sec-websocket-protocol'];
+    if (!token && subprotocol) {
+      const parts = subprotocol.split(',').map((s) => s.trim());
+      const authIdx = parts.indexOf('airgeddon-auth');
+      if (authIdx !== -1 && parts[authIdx + 1]) {
+        token = parts[authIdx + 1];
+      }
+    }
     if (!token && info.req?.url) {
       try {
         const u = new URL(info.req.url, 'http://127.0.0.1');
@@ -159,24 +185,39 @@ app.use((req, res, next) => {
   next();
 });
 
-// Protección contra CSRF en peticiones HTTP mutadoras (POST, PUT, DELETE, PATCH)
-app.use((req, res, next) => {
-  if (SAFE_METHODS.has(req.method)) return next();
-  if (!isTrustedOrigin(req)) {
-    logSystem('error', `Origen bloqueado: ${req.method} ${req.path} (Origin: ${req.get('origin') || 'sin origen'})`);
-    return res.status(403).json({
-      error: 'Origen de la petición no permitido',
-      code: 'BAD_ORIGIN',
-    });
-  }
+// Rutas GET que entregan información privada del sistema, redes o credenciales
+const SENSITIVE_GET_PATHS = new Set([
+  '/api/info',
+  '/api/diagnostics',
+  '/api/captures',
+  '/api/config/raw',
+  '/api/system/updates',
+  '/api/interfaces',
+  '/api/sudo/status',
+]);
 
-  const clientToken = req.get('x-csrf-token') || req.body?._csrf;
-  if (!isValidToken(clientToken)) {
-    logSystem('warn', `Petición mutadora rechazada: token CSRF ausente o no válido en ${req.method} ${req.path}`);
-    return res.status(403).json({
-      error: 'Token de sesión ausente o no válido',
-      code: 'BAD_CSRF_TOKEN',
-    });
+// Protección contra CSRF en peticiones HTTP mutadoras y protección de datos privados en GET
+app.use((req, res, next) => {
+  const isSensitiveGet = req.method === 'GET' && SENSITIVE_GET_PATHS.has(req.path);
+  const isMutating = !SAFE_METHODS.has(req.method);
+
+  if (isMutating || isSensitiveGet) {
+    if (!isTrustedOrigin(req)) {
+      logSystem('error', `Origen bloqueado: ${req.method} ${req.path} (Origin: ${req.get('origin') || 'sin origen'})`);
+      return res.status(403).json({
+        error: 'Origen de la petición no permitido',
+        code: 'BAD_ORIGIN',
+      });
+    }
+
+    const clientToken = req.get('x-csrf-token') || req.query?._token || req.body?._csrf;
+    if (!isValidToken(clientToken)) {
+      logSystem('warn', `Petición rechazada: token de sesión ausente o no válido en ${req.method} ${req.path}`);
+      return res.status(403).json({
+        error: 'Token de sesión ausente o no válido',
+        code: 'BAD_SESSION_TOKEN',
+      });
+    }
   }
   next();
 });
@@ -1104,12 +1145,36 @@ app.get('/api/sudo/status', async (req, res) => {
   });
 });
 
-let authAttempts = 0;
-let authLockedUntil = 0;
+const authAttemptsByIp = new Map();
+let sudoInactivityTimer = null;
+const SUDO_INACTIVITY_MS = 15 * 60 * 1000; // 15 minutos
+
+function resetSudoInactivityTimer() {
+  if (sudoInactivityTimer) clearTimeout(sudoInactivityTimer);
+  sudoInactivityTimer = setTimeout(() => {
+    if (sudoPassword) {
+      sudoPassword = null;
+      execFileP('sudo', ['-k']).catch(() => {});
+      logSystem('info', 'Sesión de sudo bloqueada automáticamente por inactividad (15 min)');
+    }
+  }, SUDO_INACTIVITY_MS);
+}
+
+function getAuthRecord(ip) {
+  let rec = authAttemptsByIp.get(ip);
+  if (!rec) {
+    rec = { attempts: 0, lockedUntil: 0 };
+    authAttemptsByIp.set(ip, rec);
+  }
+  return rec;
+}
 
 app.post('/api/auth', async (req, res) => {
-  if (Date.now() < authLockedUntil) {
-    const remainingSec = Math.ceil((authLockedUntil - Date.now()) / 1000);
+  const clientIp = req.ip || req.socket?.remoteAddress || '127.0.0.1';
+  const rec = getAuthRecord(clientIp);
+
+  if (Date.now() < rec.lockedUntil) {
+    const remainingSec = Math.ceil((rec.lockedUntil - Date.now()) / 1000);
     return res.status(429).json({
       error: `Demasiados intentos fallidos. Inténtalo de nuevo en ${remainingSec} segundos.`,
       code: 'AUTH_LOCKED',
@@ -1127,16 +1192,17 @@ app.post('/api/auth', async (req, res) => {
   const result = await sudoWithPassword(['-v'], password, { timeout: 10000 });
   if (result.ok) {
     sudoPassword = password;
-    authAttempts = 0;
-    authLockedUntil = 0;
+    rec.attempts = 0;
+    rec.lockedUntil = 0;
+    resetSudoInactivityTimer();
     return res.json({ ok: true });
   }
 
-  authAttempts++;
-  if (authAttempts >= 5) {
-    authLockedUntil = Date.now() + 60000; // Bloqueo temporal de 60 segundos
-    authAttempts = 0;
-    logSystem('warn', 'Bloqueo temporal de autenticación activado tras 5 intentos fallidos');
+  rec.attempts++;
+  if (rec.attempts >= 5) {
+    rec.lockedUntil = Date.now() + 60000; // Bloqueo temporal de 60 segundos por IP
+    rec.attempts = 0;
+    logSystem('warn', `Bloqueo temporal de autenticación activado tras 5 intentos fallidos desde ${clientIp}`);
   }
 
   res.status(401).json({ error: cleanSudoError(result.stderr) || 'Contraseña incorrecta' });
@@ -1144,6 +1210,10 @@ app.post('/api/auth', async (req, res) => {
 
 app.post('/api/lock', async (req, res) => {
   sudoPassword = null;
+  if (sudoInactivityTimer) {
+    clearTimeout(sudoInactivityTimer);
+    sudoInactivityTimer = null;
+  }
   await execFileP('sudo', ['-k'], { timeout: 3000 });
   res.json({ ok: true });
 });
@@ -1180,20 +1250,9 @@ app.post('/api/interfaces/monitor', async (req, res) => {
 });
 
 app.post('/api/interfaces/kill', async (req, res) => {
-  // Matar procesos colgados de auditorías anteriores (airodump, aireplay, etc.)
-  // IMPORTANTE: Nunca usar 'airgeddon' a secas con -f porque mataría airgeddon-gui y node.
-  const killTargets = [
-    'airodump-ng', 'aireplay-ng', 'aircrack-ng', 'mdk4',
-    'hostapd', 'dnsmasq', 'wash', 'reaver', 'bully'
-  ];
-  for (const target of killTargets) {
-    try { await sudoExec(['pkill', target], { timeout: 3000 }); } catch {}
-  }
-  // Para airgeddon, matar exclusivamente el script bash airgeddon.sh sin tocar airgeddon-gui
-  try {
-    await sudoExec(['pkill', '-f', 'bash.*[/ ]airgeddon\\.sh'], { timeout: 3000 });
-  } catch {}
-  // También ejecutar airmon-ng check kill para liberar interfaces WiFi
+  // Ejecutar exclusivamente 'airmon-ng check kill' que es el método oficial y estándar de airgeddon
+  // para liberar interfaces WiFi y detener procesos en conflicto (NetworkManager, wpa_supplicant)
+  // sin ejecutar pkill arbitrario sobre servicios ajenos como hostapd o dnsmasq.
   const result = await sudoExec(['airmon-ng', 'check', 'kill'], { timeout: 30000 });
   if (result.authRequired) return res.status(401).json({ error: 'AUTH_REQUIRED', code: 'AUTH_REQUIRED' });
   if (result.authFailed) return res.status(401).json({ error: 'Contraseña incorrecta', code: 'AUTH_FAILED' });

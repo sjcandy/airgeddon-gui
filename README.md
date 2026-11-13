@@ -7,7 +7,7 @@
 [Panel](docs/panel.png)
 
 [![MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-green.svg)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22-green.svg)](https://nodejs.org/)
 [![Linux](https://img.shields.io/badge/Platform-Linux-blue.svg)](https://www.linux.org/)
 [![airgeddon](https://img.shields.io/badge/airgeddon-compatible-orange.svg)](https://github.com/v1s1t0r1sh3r3/airgeddon)
 [![Version](https://img.shields.io/badge/version-2.0.0-teal.svg)](package.json)
@@ -168,8 +168,8 @@ chmod +x install.sh
 <summary><b>¿Qué hace exactamente?</b></summary>
 
 1. Detecta el gestor de paquetes (`pacman`, `apt` o `dnf`).
-2. Comprueba **Node.js ≥ 18** y **npm**; si faltan, te ofrece instalarlos (en Debian/Ubuntu añade el repositorio
-   oficial de NodeSource 20).
+2. Comprueba **Node.js ≥ 22** y **npm**; si faltan, te ofrece instalarlos (en Debian/Ubuntu añade el repositorio
+   oficial de NodeSource 24 LTS).
 3. Localiza una instalación previa de airgeddon o te permite indicar la ruta; si no hay ninguna, **clona
    `https://github.com/v1s1t0r1sh3r3/airgeddon.git`** automáticamente.
 4. Comprueba las herramientas de auditoría (`aircrack-ng`, `xterm`, `iw`, `curl`) y el toolchain necesario para

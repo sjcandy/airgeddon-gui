@@ -1,9 +1,38 @@
 'use strict';
 
-window.AG = window.AG || {};
+const globalScope = typeof window !== 'undefined' ? window : (typeof global !== 'undefined' ? global : {});
+if (typeof window === 'undefined') {
+  globalScope.addEventListener = () => {};
+  if (typeof global !== 'undefined') global.window = globalScope;
+}
+globalScope.AG = globalScope.AG || {};
 
-AG.app = (() => {
-  const { $, esc, icon, toast, setHTML } = AG.ui;
+/**
+ * Sanitiza celdas para prevenir inyección de fórmulas CSV (CWE-1236 / CSV Injection).
+ * Si el contenido comienza con caracteres de comando (=, +, -, @, \t, \r, %, |),
+ * precedidos o no por espacios en blanco o caracteres de control, lo neutraliza
+ * anteponiendo una comilla simple (') y escapa las comillas dobles.
+ */
+function sanitizeCsvCell(val) {
+  if (val === null || val === undefined) return '""';
+  const str = String(val);
+
+  // Detecta cualquier caracter de control o espacio inicial seguido de símbolos de fórmula
+  const formulaRegex = /^[\s\u0000-\u001f\u007f-\u009f]*[=+\-@\t\r%|]/;
+  let sanitized = str;
+  if (formulaRegex.test(str)) {
+    sanitized = "'" + str;
+  }
+
+  // Escapa comillas dobles según RFC 4180
+  const escaped = sanitized.replace(/"/g, '""');
+  return `"${escaped}"`;
+}
+
+globalScope.AG.sanitizeCsvCell = sanitizeCsvCell;
+
+globalScope.AG.app = (() => {
+  const { $, esc, icon, toast, setHTML } = (globalScope.AG && globalScope.AG.ui) || {};
 
   const VIEW_META = {
     dashboard: { title: 'Panel', crumb: 'Panel', icon: 'layout-dashboard' },
@@ -1336,7 +1365,15 @@ AG.app = (() => {
           const aps = (state.scan.aps || []);
           if (!aps.length) { toast('No hay redes para exportar', 'warn'); break; }
           const header = 'ESSID,BSSID,Channel,Band,Signal,Security,Clients';
-          const rows = aps.map((ap) => `"${(ap.essid || '').replace(/"/g, '""')}","${ap.bssid || ''}",${ap.channel || ''},"${ap.band || ''}",${ap.signal || 0},"${ap.security || ''}",${ap.clients || 0}`);
+          const rows = aps.map((ap) => [
+            sanitizeCsvCell(ap.essid || ''),
+            sanitizeCsvCell(ap.bssid || ''),
+            sanitizeCsvCell(ap.channel || ''),
+            sanitizeCsvCell(ap.band || ''),
+            sanitizeCsvCell(ap.signal ?? 0),
+            sanitizeCsvCell(ap.security || ''),
+            sanitizeCsvCell(ap.clients ?? 0),
+          ].join(','));
           const csv = header + '\n' + rows.join('\n');
           AG.ui.download(`airgeddon-networks-${new Date().toISOString().slice(0,10)}.csv`, csv, 'text/csv');
           toast(`${aps.length} redes exportadas a CSV`, 'success');
@@ -1810,10 +1847,17 @@ AG.app = (() => {
     useConsole,
     onInteractionClosed,
     updateSessionUI,
+    sanitizeCsvCell,
   };
 })();
 
-document.addEventListener('DOMContentLoaded', () => AG.app.init());
-if (document.readyState === 'interactive' || document.readyState === 'complete') {
-  setTimeout(() => AG.app.init(), 0);
+if (typeof document !== 'undefined') {
+  document.addEventListener('DOMContentLoaded', () => AG.app.init());
+  if (document.readyState === 'interactive' || document.readyState === 'complete') {
+    setTimeout(() => AG.app.init(), 0);
+  }
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { sanitizeCsvCell };
 }

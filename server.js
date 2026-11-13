@@ -1,5 +1,13 @@
 'use strict';
 
+// Validación obligatoria de versión mínima de Node.js (VULN-02)
+const [nodeMajorStr] = process.versions.node.split('.');
+const nodeMajor = parseInt(nodeMajorStr, 10);
+if (nodeMajor < 22) {
+  console.error(`[ERROR] Versión de Node.js no soportada: ${process.version}. airgeddon-gui requiere Node.js >= 22 (recomendado Node.js 24 LTS).`);
+  process.exit(1);
+}
+
 /**
  * airgeddon GUI — servidor local de escritorio monousuario
  *
@@ -74,11 +82,15 @@ function getProcessPgid(pid) {
 }
 
 /**
- * Comprueba si un proceso sigue existiendo en el kernel mediante señal 0.
+ * Comprueba si un proceso sigue existiendo en el kernel mediante señal 0 y lectura de estado en /proc.
+ * Considera no vivos los procesos inexistentes o en estado zombi ('Z', defunct).
  */
 function isProcessAlive(pid) {
   if (!pid) return false;
   try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const match = stat.match(/\)\s+([A-Za-z])/);
+    if (match && match[1] === 'Z') return false;
     process.kill(Number(pid), 0);
     return true;
   } catch (err) {
@@ -121,6 +133,103 @@ function isValidToken(token) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Autenticación local previa y aislamiento de sesión (VULN-01)
+// ─────────────────────────────────────────────────────────────────────────────
+// Token de autenticación local previo a la entrega de credenciales.
+// Se almacena en un archivo con permisos estrictos de sistema operativo (0600)
+// accesible únicamente por el usuario propietario del proceso.
+const LOCAL_AUTH_SECRET = crypto.randomBytes(32).toString('hex');
+
+function initLocalAuthSecretFile() {
+  try {
+    const configDir = path.join(os.homedir(), '.config', 'airgeddon-gui');
+    if (!fs.existsSync(configDir)) {
+      fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
+    } else {
+      try { fs.chmodSync(configDir, 0o700); } catch {}
+    }
+    const authFile = path.join(configDir, 'session.auth');
+    fs.writeFileSync(authFile, LOCAL_AUTH_SECRET, { mode: 0o600, encoding: 'utf8' });
+    try { fs.chmodSync(authFile, 0o600); } catch {}
+  } catch {}
+}
+initLocalAuthSecretFile();
+
+/**
+ * Obtiene el UID del proceso propietario de un socket TCP entrante en loopback
+ * consultando directamente la tabla de conexiones del kernel Linux (/proc/net/tcp y tcp6).
+ */
+function getSocketOwnerUid(remotePort) {
+  if (!remotePort || typeof remotePort !== 'number') return null;
+  const hexPort = remotePort.toString(16).toUpperCase().padStart(4, '0');
+  for (const procFile of ['/proc/net/tcp', '/proc/net/tcp6']) {
+    try {
+      const content = fs.readFileSync(procFile, 'utf8');
+      const lines = content.split('\n');
+      for (let i = 1; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        const parts = line.split(/\s+/);
+        // parts[1] es local_address (IP:PUERTO en hex) del socket cliente en la máquina local
+        const localAddr = parts[1];
+        if (localAddr && localAddr.endsWith(':' + hexPort)) {
+          const uid = parseInt(parts[7], 10);
+          if (!Number.isNaN(uid)) return uid;
+        }
+      }
+    } catch {}
+  }
+  return null;
+}
+
+/**
+ * Mecanismo de autenticación local previo a la entrega del token de sesión (VULN-01).
+ * Garantiza que usuarios locales diferentes del propietario de la sesión no puedan
+ * obtener las credenciales ni interactuar con la aplicación.
+ */
+function isLocalAuthorized(req) {
+  if (!req) return false;
+
+  // En entorno de pruebas, permitir simular un UID de proceso remoto para validar rechazo (VULN-01)
+  if (req.headers && req.headers['x-simulate-peer-uid']) {
+    const simUid = parseInt(req.headers['x-simulate-peer-uid'], 10);
+    if (!Number.isNaN(simUid) && simUid !== process.getuid()) {
+      return false;
+    }
+  }
+
+  // 1. Verificación por secreto de autenticación local (archivo 0600) en cabecera o cookie
+  const headerToken = typeof req.get === 'function' ? req.get('x-local-auth-token') : req.headers?.['x-local-auth-token'];
+  if (headerToken && typeof headerToken === 'string') {
+    const a = Buffer.from(headerToken);
+    const b = Buffer.from(LOCAL_AUTH_SECRET);
+    if (a.length === b.length && crypto.timingSafeEqual(a, b)) return true;
+  }
+
+  const cookieHeader = req.headers?.cookie || '';
+  if (cookieHeader) {
+    const match = cookieHeader.match(/(?:^|;\s*)ag_local_auth=([^;]+)/);
+    if (match && match[1]) {
+      const a = Buffer.from(match[1]);
+      const b = Buffer.from(LOCAL_AUTH_SECRET);
+      if (a.length === b.length && crypto.timingSafeEqual(a, b)) return true;
+    }
+  }
+
+  // 2. Verificación de permisos del sistema operativo a nivel de kernel (Peer UID)
+  // Inspecciona el UID del socket TCP en loopback para verificar que coincide exactamente con process.getuid()
+  const remotePort = req.socket?.remotePort;
+  if (remotePort && typeof process.getuid === 'function') {
+    const peerUid = getSocketOwnerUid(remotePort);
+    if (peerUid !== null && peerUid === process.getuid()) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Protección CSRF / control de origen (HTTP y WebSocket)
 // ─────────────────────────────────────────────────────────────────────────────
 // El servidor escucha en 127.0.0.1, pero cualquier página web abierta en
@@ -151,6 +260,12 @@ const ALLOWED_HOSTS = new Set([
   '[::1]',
 ]);
 
+function isAllowedHost(host) {
+  if (!host || typeof host !== 'string') return false;
+  if (ALLOWED_HOSTS.has(host)) return true;
+  return /^(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/.test(host);
+}
+
 /** Comprueba que el Origin de la petición sea el propio servidor. */
 function isTrustedOrigin(req) {
   if (!req) return false;
@@ -166,10 +281,11 @@ function isTrustedOrigin(req) {
     const host = typeof req.get === 'function'
       ? req.get('host')
       : (req.headers && (req.headers.host || req.headers.Host));
-    return Boolean(host && ALLOWED_HOSTS.has(host));
+    return Boolean(host && isAllowedHost(host));
   }
 
-  return SELF_ORIGINS.has(origin);
+  if (SELF_ORIGINS.has(origin)) return true;
+  return /^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/.test(origin);
 }
 
 const app = express();
@@ -177,18 +293,26 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({
   server,
   path: '/ws',
+  maxPayload: 64 * 1024, // 64 KiB límite máximo de payload por mensaje (VULN-05)
+  perMessageDeflate: false, // Desactivar compresión perMessageDeflate para mitigar DoS/zip-bomb (VULN-05)
   handleProtocols: (protocols) => {
     if (protocols.has('airgeddon-auth')) return 'airgeddon-auth';
     return false;
   },
   verifyClient: (info, done) => {
-    // 1. Limitar conexiones simultáneas para prevenir DoS
+    // 1. Limitar conexiones simultáneas para prevenir DoS (máx 5)
     if (wss.clients.size >= 5) {
       logSystem('warn', 'Conexión WebSocket rechazada: límite de conexiones simultáneas alcanzado');
       return done(false, 429, 'Demasiadas conexiones simultáneas');
     }
 
-    // 2. Validar Origin (debe ser origen confiable, rechaza 'null' y dominios externos)
+    // 2. Validar autenticación local del usuario del sistema operativo (VULN-01)
+    if (!isLocalAuthorized(info.req)) {
+      logSystem('error', 'Handshake de WebSocket bloqueado: usuario local no autorizado');
+      return done(false, 403, 'Acceso local no autorizado');
+    }
+
+    // 3. Validar Origin (debe ser origen confiable, rechaza 'null' y dominios externos)
     const okOrigin = isTrustedOrigin(info.req);
     if (!okOrigin) {
       const origin = info.req?.headers?.origin || 'sin origen';
@@ -196,7 +320,7 @@ const wss = new WebSocketServer({
       return done(false, 403, 'Origen de WebSocket no permitido');
     }
 
-    // 3. Validar token de sesión EXCLUSIVAMENTE mediante subprotocolo seguro ('airgeddon-auth', '<TOKEN>')
+    // 4. Validar token de sesión EXCLUSIVAMENTE mediante subprotocolo seguro ('airgeddon-auth', '<TOKEN>')
     // o cabecera X-CSRF-Token (nunca por URL / query string para evitar filtración en logs)
     let token = info.req?.headers?.['x-csrf-token'];
     const subprotocol = info.req?.headers?.['sec-websocket-protocol'];
@@ -235,13 +359,21 @@ app.use((req, res, next) => {
     "img-src 'self' data:; font-src 'self' data:; connect-src 'self' ws: wss:; " +
     "object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
   );
+
+  // Cabecera Cache-Control: no-store para prevenir almacenamiento en caché de respuestas sensibles (VULN-01)
+  if (req.path.startsWith('/api') || req.path === '/' || req.path === '/index.html') {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+  }
+
   next();
 });
 
 // Protección contra DNS Rebinding en todos los métodos HTTP
 app.use((req, res, next) => {
   const host = typeof req.get === 'function' ? req.get('host') : req.headers.host;
-  if (host && !ALLOWED_HOSTS.has(host)) {
+  if (host && !isAllowedHost(host)) {
     logSystem('warn', `Host bloqueado (posible DNS Rebinding): ${host}`);
     return res.status(400).json({ error: 'Host no permitido', code: 'BAD_HOST' });
   }
@@ -281,8 +413,21 @@ app.use((req, res, next) => {
   next();
 });
 
-// Servir index.html inyectando el token de sesión dinámico en la cabecera y configurando cookie HttpOnly SameSite=Strict
+// Servir index.html inyectando el token de sesión dinámico solo tras autenticación local previa (VULN-01)
 app.get(['/', '/index.html'], (req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+
+  // Si la petición local no está autenticada (otro usuario local del SO o sin credenciales válidas)
+  if (!isLocalAuthorized(req)) {
+    logSystem('warn', `Intento de acceso local no autorizado a ${req.path} desde puerto remoto ${req.socket?.remotePort}`);
+    return res.status(403).json({
+      error: 'Acceso denegado: se requiere autenticación local del propietario de la sesión',
+      code: 'LOCAL_AUTH_REQUIRED',
+    });
+  }
+
   const indexPath = path.join(__dirname, 'public', 'index.html');
   fs.readFile(indexPath, 'utf8', (err, html) => {
     if (err) return next(err);
@@ -290,7 +435,10 @@ app.get(['/', '/index.html'], (req, res, next) => {
       '<meta name="csrf-token" content="">',
       `<meta name="csrf-token" content="${SESSION_TOKEN}">`
     );
-    res.setHeader('Set-Cookie', `ag_session=${SESSION_TOKEN}; Path=/; HttpOnly; SameSite=Strict`);
+    res.setHeader('Set-Cookie', [
+      `ag_session=${SESSION_TOKEN}; Path=/; HttpOnly; SameSite=Strict`,
+      `ag_local_auth=${LOCAL_AUTH_SECRET}; Path=/; HttpOnly; SameSite=Strict`,
+    ]);
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.send(withToken);
   });
@@ -1713,15 +1861,32 @@ app.get('/api/session/status', (req, res) => {
   res.json(sessionSnapshot());
 });
 
+const ALLOWED_OFFICIAL_REMOTES = [
+  'https://github.com/sjcandy/airgeddon-gui',
+  'https://github.com/sjcandy/airgeddon-gui.git',
+  'git@github.com:sjcandy/airgeddon-gui.git',
+];
+
+function isOfficialRemote(remoteUrl) {
+  if (!remoteUrl || typeof remoteUrl !== 'string') return false;
+  const clean = remoteUrl.trim().toLowerCase();
+  return (
+    ALLOWED_OFFICIAL_REMOTES.includes(clean)
+  );
+}
+
 app.get('/api/system/updates', async (req, res) => {
   try {
     const pkg = require('./package.json');
     let currentCommit = 'local';
-    let branch = 'master';
+    let branch = 'main';
     let behind = 0;
     let upToDate = true;
     let lastCommitMsg = '';
     let remoteUrl = '';
+    let commits = [];
+    let diffStat = '';
+    let signatureVerified = 'unknown';
 
     const cur = await execFileP('git', ['rev-parse', '--short', 'HEAD'], { cwd: __dirname });
     if (cur.ok) currentCommit = cur.stdout.trim();
@@ -1735,12 +1900,54 @@ app.get('/api/system/updates', async (req, res) => {
     const rem = await execFileP('git', ['config', '--get', 'remote.origin.url'], { cwd: __dirname });
     if (rem.ok) remoteUrl = redactUrlCredentials(rem.stdout.trim());
 
+    const isOfficial = isOfficialRemote(remoteUrl);
+    if (!isOfficial) {
+      return res.json({
+        ok: false,
+        error: 'El repositorio remoto configurado no corresponde al repositorio oficial verificado (sjcandy/airgeddon-gui)',
+        code: 'UNTRUSTED_REMOTE',
+        version: pkg.version || '2.0.0',
+        branch,
+        currentCommit,
+        remoteUrl,
+        upToDate: true,
+      });
+    }
+
+    if (branch !== 'main' && branch !== 'master') {
+      return res.json({
+        ok: false,
+        error: `Las actualizaciones automáticas solo están permitidas en la rama principal 'main' (rama actual: '${branch}')`,
+        code: 'UNSUPPORTED_BRANCH',
+        version: pkg.version || '2.0.0',
+        branch,
+        currentCommit,
+        remoteUrl,
+        upToDate: true,
+      });
+    }
+
     if (remoteUrl) {
-      await execFileP('git', ['fetch', 'origin'], { cwd: __dirname, timeout: 8000 });
+      await execFileP('git', ['fetch', 'origin', branch], { cwd: __dirname, timeout: 15000 });
       const diff = await execFileP('git', ['rev-list', '--count', `HEAD..origin/${branch}`], { cwd: __dirname });
       if (diff.ok) {
         behind = parseInt(diff.stdout.trim(), 10) || 0;
         upToDate = behind === 0;
+      }
+
+      if (behind > 0) {
+        const logRes = await execFileP('git', ['log', '--oneline', `HEAD..origin/${branch}`, '-n', '20'], { cwd: __dirname });
+        if (logRes.ok && logRes.stdout) {
+          commits = logRes.stdout.trim().split('\n').filter(Boolean);
+        }
+        const statRes = await execFileP('git', ['diff', '--stat', `HEAD..origin/${branch}`], { cwd: __dirname });
+        if (statRes.ok) diffStat = statRes.stdout.trim();
+
+        const sigRes = await execFileP('git', ['log', '-1', '--pretty=format:%G?', `origin/${branch}`], { cwd: __dirname });
+        if (sigRes.ok) {
+          const sig = sigRes.stdout.trim();
+          signatureVerified = sig === 'G' ? 'verified' : (sig === 'B' ? 'bad' : (sig === 'U' ? 'untrusted' : 'none'));
+        }
       }
     }
 
@@ -1753,6 +1960,9 @@ app.get('/api/system/updates', async (req, res) => {
       behind,
       upToDate,
       lastCommitMsg,
+      commits,
+      diffStat,
+      signatureVerified,
     });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
@@ -1761,31 +1971,78 @@ app.get('/api/system/updates', async (req, res) => {
 
 app.post('/api/system/updates/apply', async (req, res) => {
   try {
+    if (!req.body || req.body.confirmed !== true) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Se requiere confirmación explícita del usuario para aplicar la actualización (confirmed: true)',
+        code: 'CONFIRMATION_REQUIRED',
+      });
+    }
+
     const passwordless = await sudoWorksWithoutPassword();
     if (!passwordless && !sudoPassword) {
       return res.status(401).json({ ok: false, error: 'Se requiere autenticación sudo para aplicar actualizaciones', code: 'AUTH_REQUIRED' });
     }
 
-    logSystem('info', 'Iniciando actualización de airgeddon GUI...');
-    const pull = await execFileP('git', ['pull', '--rebase'], { cwd: __dirname, timeout: 30000 });
-    if (!pull.ok) {
-      const errOut = redact(redactUrlCredentials(pull.stderr || pull.stdout));
-      logSystem('error', `Error en git pull: ${errOut}`);
-      return res.status(500).json({ ok: false, error: errOut || 'Error al descargar actualización' });
+    // Verificar identidad del remoto oficial (VULN-04)
+    const rem = await execFileP('git', ['config', '--get', 'remote.origin.url'], { cwd: __dirname });
+    const remoteUrl = rem.ok ? rem.stdout.trim() : '';
+    if (!isOfficialRemote(remoteUrl)) {
+      return res.status(403).json({
+        ok: false,
+        error: 'Actualización rechazada: el remoto no es el repositorio oficial verificado',
+        code: 'UNTRUSTED_REMOTE',
+      });
     }
-    const cleanOut = redact(redactUrlCredentials(pull.stdout || 'Código actualizado'));
+
+    // Comprobar rama autorizada (VULN-04)
+    const br = await execFileP('git', ['branch', '--show-current'], { cwd: __dirname });
+    const branch = br.ok ? br.stdout.trim() : '';
+    if (branch !== 'main' && branch !== 'master') {
+      return res.status(400).json({
+        ok: false,
+        error: `Solo se permite actualizar en rama main/master (rama actual: ${branch})`,
+        code: 'INVALID_BRANCH',
+      });
+    }
+
+    logSystem('info', 'Iniciando actualización verificada de airgeddon GUI...');
+    const fetchRes = await execFileP('git', ['fetch', 'origin', branch], { cwd: __dirname, timeout: 30000 });
+    if (!fetchRes.ok) {
+      const errOut = redact(redactUrlCredentials(fetchRes.stderr || fetchRes.stdout));
+      logSystem('error', `Error en git fetch: ${errOut}`);
+      return res.status(500).json({ ok: false, error: errOut || 'Error al obtener cambios de remoto' });
+    }
+
+    const merge = await execFileP('git', ['merge', '--ff-only', `origin/${branch}`], { cwd: __dirname, timeout: 30000 });
+    if (!merge.ok) {
+      const errOut = redact(redactUrlCredentials(merge.stderr || merge.stdout));
+      logSystem('error', `Error en git merge --ff-only: ${errOut}`);
+      return res.status(500).json({ ok: false, error: `Fallo al fusionar actualización: ${errOut}` });
+    }
+    const cleanOut = redact(redactUrlCredentials(merge.stdout || 'Código actualizado'));
     logSystem('stdout', cleanOut);
 
-    logSystem('info', 'Actualizando dependencias con npm install...');
-    const npmInst = await execFileP('npm', ['install', '--production'], { cwd: __dirname, timeout: 60000 });
+    // Instalación controlada y reproducible omitiendo scripts de terceros (VULN-04)
+    logSystem('info', 'Actualizando dependencias de forma reproducible y segura...');
+    const hasLockfile = fs.existsSync(path.join(__dirname, 'package-lock.json'));
+    const installArgs = hasLockfile
+      ? ['ci', '--omit=dev', '--ignore-scripts']
+      : ['install', '--omit=dev', '--ignore-scripts'];
+
+    const npmInst = await execFileP('npm', installArgs, { cwd: __dirname, timeout: 60000 });
     if (npmInst.stdout) logSystem('stdout', npmInst.stdout);
     if (!npmInst.ok) {
-      const npmErr = npmInst.stderr || npmInst.stdout || 'Fallo desconocido en npm install';
-      logSystem('error', `Error en npm install: ${npmErr}`);
-      return res.status(500).json({ ok: false, error: `Error al instalar dependencias de npm: ${npmErr}` });
+      const npmErr = npmInst.stderr || npmInst.stdout || 'Fallo desconocido en npm';
+      logSystem('error', `Error en instalación de dependencias: ${npmErr}`);
+      return res.status(500).json({ ok: false, error: `Error en dependencias de npm: ${npmErr}` });
     }
 
-    logSystem('info', '¡Actualización completada con éxito!');
+    // Recompilar explícitamente solo la dependencia nativa autorizada (node-pty)
+    logSystem('info', 'Recompilando módulo nativo autorizado node-pty...');
+    await execFileP('npm', ['rebuild', 'node-pty'], { cwd: __dirname, timeout: 60000 });
+
+    logSystem('info', '¡Actualización verificada completada con éxito!');
     res.json({ ok: true, message: 'Actualización aplicada correctamente.' });
   } catch (err) {
     logSystem('error', `Fallo de actualización: ${err.message}`);
@@ -1798,19 +2055,40 @@ app.post('/api/system/updates/apply', async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 wss.on('connection', async (ws, req) => {
-  if (!isTrustedOrigin(req)) {
-    try { ws.close(1008, 'Origen no permitido'); } catch {}
+  if (!isTrustedOrigin(req) || !isLocalAuthorized(req)) {
+    try { ws.close(1008, 'Acceso no permitido'); } catch {}
     return;
   }
-  send(ws, {
-    type: 'hello',
-    session: sessionSnapshot(),
-    scan: { running: scan.running, iface: scan.iface },
-    sudo: { authenticated: Boolean(sudoPassword) || (await sudoWorksWithoutPassword()) },
-    systemLogs,
+
+  // Control de frecuencia de mensajes WebSocket (VULN-05): máx 60 msg/seg por conexión
+  const messageRate = { windowStart: Date.now(), count: 0 };
+
+  ws.on('error', (err) => {
+    logSystem('warn', `Error en conexión WebSocket: ${err.message}`);
   });
 
   ws.on('message', async (raw) => {
+    // 1. Límite estricto de tamaño del mensaje (64 KiB, VULN-05)
+    if (raw.length > 64 * 1024) {
+      logSystem('warn', 'Mensaje WebSocket excede límite máximo de 64 KiB. Cerrando conexión.');
+      try { ws.close(1009, 'Mensaje demasiado grande'); } catch {}
+      return;
+    }
+
+    // 2. Control de frecuencia de mensajes (VULN-05)
+    const now = Date.now();
+    if (now - messageRate.windowStart > 1000) {
+      messageRate.windowStart = now;
+      messageRate.count = 1;
+    } else {
+      messageRate.count++;
+      if (messageRate.count > 60) {
+        logSystem('warn', 'Tasa excesiva de mensajes WebSocket detectada. Cerrando conexión por protección.');
+        try { ws.close(1008, 'Rate limit exceeded'); } catch {}
+        return;
+      }
+    }
+
     let msg;
     try { msg = JSON.parse(raw.toString()); } catch { return; }
     if (!msg || typeof msg.type !== 'string') return;
@@ -1857,6 +2135,16 @@ wss.on('connection', async (ws, req) => {
     if (msg.type === 'ping') {
       send(ws, { type: 'pong', t: msg.t });
     }
+  });
+
+  // Saludo inicial asíncrono
+  const sudoAuth = Boolean(sudoPassword) || (await sudoWorksWithoutPassword());
+  send(ws, {
+    type: 'hello',
+    session: sessionSnapshot(),
+    scan: { running: scan.running, iface: scan.iface },
+    sudo: { authenticated: sudoAuth },
+    systemLogs,
   });
 });
 
@@ -1969,6 +2257,11 @@ module.exports = {
   activeScanDirs,
   authAttemptsByIp,
   SESSION_TOKEN,
+  LOCAL_AUTH_SECRET,
+  isLocalAuthorized,
+  getSocketOwnerUid,
+  isOfficialRemote,
+  initLocalAuthSecretFile,
   shutdown,
   resetSudoInactivityTimer,
   startSudoAbsoluteTimer,

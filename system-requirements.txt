@@ -8,14 +8,17 @@
 # airgeddon GUI y la suite de herramientas inalámbricas en tu distribución Linux:
 # ==============================================================================
 
-# 1. Entorno de Ejecución (Node.js >= 18 y npm)
+# 1. Entorno de Ejecución (Node.js >= 22 y npm, recomendado Node.js 24 LTS)
 # ------------------------------------------------------------------------------
 # Arch / CachyOS / Manjaro:
 #   sudo pacman -S --needed nodejs npm
-# Debian / Ubuntu / Kali / Parrot:
-#   sudo apt install -y nodejs npm
+# Debian / Ubuntu / Kali / Parrot (NodeSource 24 LTS):
+#   curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
+#   sudo apt install -y nodejs npm build-essential
 # Fedora / RHEL:
 #   sudo dnf install -y nodejs npm
+# openSUSE:
+#   sudo zypper install -y nodejs npm
 #
 # Nota: la dependencia node-pty es un módulo nativo y necesita un compilador
 #   para compilarse la primera vez (se instala automáticamente con npm install).

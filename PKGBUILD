@@ -8,7 +8,7 @@ pkgdesc="Entorno gráfico nativo y suite de escritorio para airgeddon (auditorí
 arch=('any')
 url="https://github.com/sjcandy/airgeddon-gui"
 license=('MIT')
-depends=('nodejs>=18' 'npm' 'bash' 'sudo' 'iproute2')
+depends=('nodejs>=22' 'npm' 'bash' 'sudo' 'iproute2')
 optdepends=(
   'brave-bin: Ventana de escritorio nativa sin marco de navegador'
   'chromium: Ventana de escritorio nativa'

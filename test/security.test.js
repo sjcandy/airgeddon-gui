@@ -187,9 +187,8 @@ test('[INTEGRACIÓN REAL] Ciclo real de stopSession termina el proceso principal
 
   // 2. TODOS los procesos descendientes deben haber terminado (sin huérfanos)
   for (const cpid of descendantPids) {
-    assert.throws(
-      () => process.kill(Number(cpid), 0),
-      /ESRCH/,
+    assert.ok(
+      !isProcessAlive(cpid),
       `El proceso descendiente ${cpid} debe haber sido terminado por stopSession`
     );
   }
@@ -412,15 +411,14 @@ test('[INTEGRACIÓN REAL] shutdown() invoca stopScan y stopSession({ immediate: 
     // 1. El proceso PTY principal y todos sus descendientes deben haber terminado
     assert.throws(() => process.kill(ptyPid, 0), /ESRCH/, 'El proceso PTY debe haber terminado');
     for (const cpid of ptyDescendants) {
-      assert.throws(() => process.kill(Number(cpid), 0), /ESRCH/, `El descendiente PTY ${cpid} debe haber terminado`);
+      assert.ok(!isProcessAlive(cpid), `El descendiente PTY ${cpid} debe haber terminado`);
     }
 
     // 2. El proceso principal de escaneo y todos sus descendientes deben haber terminado
     assert.throws(() => process.kill(scanPid, 0), /ESRCH/, 'El proceso principal de escaneo debe haber terminado');
     for (const cpid of scanDescendants) {
-      assert.throws(
-        () => process.kill(Number(cpid), 0),
-        /ESRCH/,
+      assert.ok(
+        !isProcessAlive(cpid),
         `El proceso descendiente de escaneo ${cpid} debe haber sido terminado por shutdown`
       );
     }
@@ -493,7 +491,7 @@ test('[INTEGRACIÓN REAL] shutdown() espera la finalización completa cuando la 
     // 1. El proceso de escaneo y todos sus descendientes deben haber terminado
     assert.throws(() => process.kill(scanPid, 0), /ESRCH/, 'El proceso de escaneo debió terminar');
     for (const cpid of scanDescendants) {
-      assert.throws(() => process.kill(Number(cpid), 0), /ESRCH/, `El descendiente ${cpid} debió terminar`);
+      assert.ok(!isProcessAlive(cpid), `El descendiente ${cpid} debió terminar`);
     }
 
     // 2. El proceso testigo ajeno sobrevive

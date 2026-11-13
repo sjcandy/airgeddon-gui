@@ -180,8 +180,8 @@ app.use((req, res, next) => {
   next();
 });
 
-// Rutas públicas que no requieren token (solo comprobación básica de salud y handshake)
-const PUBLIC_API_PATHS = new Set(['/api/health', '/api/csrf-token']);
+// Rutas públicas que no requieren token (solo comprobación básica de salud)
+const PUBLIC_API_PATHS = new Set(['/api/health']);
 
 // Protección contra CSRF en peticiones HTTP mutadoras y protección estricta de todos los endpoints de API
 app.use((req, res, next) => {
@@ -191,7 +191,7 @@ app.use((req, res, next) => {
   const isPublicApi = PUBLIC_API_PATHS.has(normalizedPath);
   const isMutating = !SAFE_METHODS.has(req.method);
 
-  // Todo /api (excepto /api/health y /api/csrf-token) y todos los métodos mutadores exigen autenticación con token
+  // Todo /api (excepto /api/health) y todos los métodos mutadores exigen autenticación con token
   if (isMutating || (isApi && !isPublicApi)) {
     if (!isTrustedOrigin(req)) {
       logSystem('error', `Origen bloqueado: ${req.method} ${req.path} (Origin: ${req.get('origin') || 'sin origen'})`);
@@ -226,11 +226,6 @@ app.get(['/', '/index.html'], (req, res, next) => {
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.send(withToken);
   });
-});
-
-app.get('/api/csrf-token', (req, res) => {
-  if (!isTrustedOrigin(req)) return res.status(403).json({ error: 'Origen no permitido' });
-  res.json({ token: SESSION_TOKEN });
 });
 
 // Dependencias del frontend servidas desde node_modules (sin CDN)
@@ -540,9 +535,22 @@ async function startSession({ cols = 120, rows = 40 } = {}) {
   return sessionSnapshot();
 }
 
-/** Termina recursivamente un proceso y toda su descendencia de subprocesos. */
+/**
+ * Termina de forma atómica y recursiva un proceso, su grupo de procesos (PGID)
+ * y toda su descendencia de subprocesos para neutralizar condiciones de carrera.
+ */
 async function killProcessTree(rootPid, signal = '-9') {
   if (!rootPid) return;
+  // 1. Obtener y señalizar atómicamente el grupo de procesos (PGID) en el kernel
+  try {
+    const pgRes = await sudoExec(['ps', '-o', 'pgid=', '-p', String(rootPid)]);
+    const pgid = pgRes.ok && pgRes.stdout ? pgRes.stdout.trim().split(/\s+/)[0] : '';
+    if (pgid && pgid !== '0' && pgid !== '1') {
+      await sudoExec(['kill', signal, `-${pgid}`]);
+    }
+  } catch {}
+
+  // 2. Recorrer recursivamente todos los procesos descendientes
   try {
     const res = await sudoExec(['pgrep', '-P', String(rootPid)]);
     if (res.ok && res.stdout) {
@@ -552,6 +560,8 @@ async function killProcessTree(rootPid, signal = '-9') {
       }
     }
   } catch {}
+
+  // 3. Asegurar la terminación del proceso raíz
   try {
     await sudoExec(['kill', signal, String(rootPid)]);
   } catch {}
@@ -1161,10 +1171,16 @@ const SUDO_INACTIVITY_MS = 15 * 60 * 1000; // 15 minutos
 function resetSudoInactivityTimer() {
   if (sudoInactivityTimer) clearTimeout(sudoInactivityTimer);
   sudoInactivityTimer = setTimeout(() => {
+    // Si hay una sesión activa de airgeddon o un escaneo en curso, posponer el bloqueo
+    // para no interrumpir operaciones de auditoría largas en progreso
+    if (session.running || scan.running) {
+      resetSudoInactivityTimer();
+      return;
+    }
     if (sudoPassword) {
       sudoPassword = null;
       execFileP('sudo', ['-k']).catch(() => {});
-      logSystem('info', 'Sesión de sudo bloqueada automáticamente por inactividad (15 min)');
+      logSystem('info', 'Sesión de sudo bloqueada automáticamente por inactividad (15 min sin operaciones)');
     }
   }, SUDO_INACTIVITY_MS);
 }

@@ -39,8 +39,11 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - El botón de tema se traslada exclusivamente a Configuración; la barra superior usa el color de acento.
 
 ### Security
+- Eliminación del endpoint `/api/csrf-token` no autenticado; la única ruta pública es `/api/health`.
+- Señalización atómica a nivel de grupo de procesos (`kill -<sig> -<pgid>`) combinada con recursión en `killProcessTree` para neutralizar condiciones de carrera y procesos huérfanos.
+- Temporizador sudo resiliente a auditorías largas: se pospone automáticamente mientras haya una sesión (`session.running`) o escaneo (`scan.running`) activo.
 - Normalización canónica de rutas (`req.path.toLowerCase().replace(/\/+$/, '')`) neutralizando bypasses por mayúsculas o barras finales (`/API/CAPTURES/`).
-- Protección global estricta sobre todo el prefijo `/api/*` (incluyendo `/api/config`, `/api/scan/status` y `/api/session/status`), manteniendo públicas exclusivamente `/api/health` y `/api/csrf-token`.
+- Protección global estricta sobre todo el prefijo `/api/*` (incluyendo `/api/config`, `/api/scan/status` y `/api/session/status`).
 - Eliminación total del fallback por query string (`?token=`) en WebSocket: se exige exclusivamente autenticación por subprotocolo `airgeddon-auth`.
 - Medición de inactividad real para el temporizador de `sudo`: el reloj de 15 minutos se reinicia en cada ejecución privilegiada de `sudoExec` y en cada comando de terminal.
 - Terminación recursiva de procesos (`killProcessTree`): recorre el árbol completo de procesos hijos y descendientes sin dejar procesos huérfanos.

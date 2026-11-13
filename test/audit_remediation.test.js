@@ -120,7 +120,7 @@ test('[VULN-01] Petición GET / de otro usuario local (UID distinto) es rechazad
   const unauthRes = await fetch(`http://127.0.0.1:${testPort}/`, {
     headers: {
       Host: '127.0.0.1',
-      'X-Simulate-Peer-Uid': '1001',
+      'X-Simulate-Peer-Uid': String(process.getuid() + 1),
     },
   });
 

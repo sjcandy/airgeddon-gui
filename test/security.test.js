@@ -471,13 +471,13 @@ test('[INTEGRACIÓN REAL] shutdown() espera la finalización completa cuando la 
 
   try {
     // Configurar apagado con exit: true pero inyectando exitFn para no matar el test runner,
-    // y una demora de limpieza de 1.700 ms (> 1.500 ms) para verificar que no existe ningún timeout
-    // prematuro que aborte la operación antes de concluir la limpieza.
+    // y una demora en la operacion real de limpieza de stopScan de 1.700 ms (> 1.500 ms) para
+    // verificar que no existe ningun timeout prematuro que aborte la operacion antes de concluir la limpieza.
     await shutdown({
       exit: true,
       watchdogMs: 5000,
       exitFn: mockExitFn,
-      _testCleanupDelayMs: 1700,
+      scanCleanupDelayMs: 1700,
     });
 
     const elapsed = Date.now() - startTime;

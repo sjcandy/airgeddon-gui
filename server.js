@@ -1025,7 +1025,7 @@ async function startScan(iface, band = 'abg') {
   return scanSnapshot();
 }
 
-async function stopScan({ silent = false, immediate = false, timeoutMs = 1500 } = {}) {
+async function stopScan({ silent = false, immediate = false, timeoutMs = 1500, cleanupDelayMs = 0 } = {}) {
   if (scan.timer) { clearInterval(scan.timer); scan.timer = null; }
   if (scan.proc || scan.pid) {
     scan.stopping = true;
@@ -1035,6 +1035,10 @@ async function stopScan({ silent = false, immediate = false, timeoutMs = 1500 } 
 
     // 1. Limpieza de procesos y descendientes
     if (procPid) {
+      if (cleanupDelayMs > 0) {
+        // Simulación de operaciones de E/S o terminación prolongada dentro del ciclo real de limpieza
+        await new Promise((resolve) => setTimeout(resolve, cleanupDelayMs));
+      }
       if (immediate) {
         // En terminación inmediata (ej. shutdown), terminar el grupo directamente con SIGKILL sin esperas
         await killProcessTree(procPid, '-9', targetPgid);
@@ -1742,32 +1746,27 @@ wss.on('connection', async (ws, req) => {
  *   NOTA: Este watchdog es estrictamente una SALIDA DE EMERGENCIA de último recurso y NO garantiza
  *   una limpieza ordenada.
  * @param {Function} [options.exitFn=process.exit] - Función invocada para terminar el proceso (configurable en tests).
- * @param {number} [_testCleanupDelayMs=0] - Retardo simulado para pruebas de operaciones de limpieza prolongadas.
+ * @param {number} [options.scanCleanupDelayMs=0] - Demora en la operación real de limpieza de stopScan para pruebas de estrés.
  */
 async function shutdown({
   exit = true,
   watchdogMs = 10000,
   exitFn = process.exit,
-  _testCleanupDelayMs = 0,
+  scanCleanupDelayMs = 0,
 } = {}) {
-  // 1. PRIMERO: Si existen operaciones de limpieza en curso o prolongadas, se esperan completamente
-  // sin que ningún temporizador de salida forzada pueda abortar o truncar la ejecución.
-  if (_testCleanupDelayMs > 0) {
-    await new Promise((resolve) => setTimeout(resolve, _testCleanupDelayMs));
-  }
-
-  // 2. Limpieza síncrona/esperada de todos los árboles de procesos (escáner y sesión PTY)
-  await stopScan({ silent: true, immediate: true });
+  // 1. PRIMERO: Limpieza síncrona/esperada de todos los árboles de procesos (escáner y sesión PTY).
+  // Cualquier retardo en la finalización o limpieza interna de los procesos es esperado de forma íntegra.
+  await stopScan({ silent: true, immediate: true, cleanupDelayMs: scanCleanupDelayMs });
   await stopSession({ immediate: true });
 
-  // 3. SEGUNDO: Cerrar de forma activa todas las conexiones WebSocket abiertas
+  // 2. SEGUNDO: Cerrar de forma activa todas las conexiones WebSocket abiertas
   if (wss && wss.clients) {
     for (const client of wss.clients) {
       try { client.terminate(); } catch {}
     }
   }
 
-  // 4. TERCERO: Cerrar el servidor HTTP y sus sockets
+  // 3. TERCERO: Cerrar el servidor HTTP y sus sockets
   return new Promise((resolve) => {
     let watchdogTimer = null;
     let finished = false;
@@ -1789,6 +1788,7 @@ async function shutdown({
       try { server.closeAllConnections(); } catch {}
     }
 
+    // Esperar estrictamente a que el servidor HTTP termine de cerrar todos sus sockets
     server.close((err) => {
       if (err) {
         logSystem('warn', `Error al cerrar servidor HTTP en shutdown: ${err.message}`);
@@ -1800,13 +1800,11 @@ async function shutdown({
     // NOTA: Este temporizador NO garantiza una limpieza completa. Es estrictamente un mecanismo
     // defensivo de emergencia para evitar que el proceso de Node.js quede colgado indefinidamente
     // si existen sockets o conexiones de red atascadas que impidan a server.close() invocar su callback.
-    if (exit && watchdogMs > 0) {
+    if (watchdogMs > 0) {
       watchdogTimer = setTimeout(() => {
         logSystem('warn', `[EMERGENCIA] Watchdog de apagado activado tras ${watchdogMs} ms: cierre forzado`);
         finalize(1);
       }, watchdogMs);
-    } else if (!exit) {
-      setTimeout(() => finalize(0), 100);
     }
   });
 }

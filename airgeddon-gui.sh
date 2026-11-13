@@ -91,8 +91,10 @@ if ! command -v node &> /dev/null; then
 fi
 
 NODE_VER=$(node -v | sed 's/v//' | cut -d. -f1)
-if [ "$NODE_VER" -lt 18 ]; then
-    echo -e "${YELLOW}[!] Advertencia: Se recomienda Node.js >= 18. Versión detectada: $(node -v)${NC}"
+if [ "$NODE_VER" -lt 22 ]; then
+    echo -e "${RED}[✗] Error: Se requiere Node.js >= 22 (versión detectada: $(node -v) está fuera de soporte).${NC}"
+    echo -e "    Por favor actualiza a Node.js 24 LTS (recomendado)."
+    exit 1
 fi
 
 # 2. Comprobar npm

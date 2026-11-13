@@ -3,7 +3,7 @@
 # airgeddon-gui — Script de Instalación Automatizado
 # ==============================================================================
 # Configura el entorno completo para un usuario nuevo:
-# 1. Comprueba / instala Node.js (>=18) y npm.
+# 1. Comprueba / instala Node.js (>=22, Node.js 24 LTS por defecto) y npm.
 # 2. Pregunta si ya tiene airgeddon instalado; si no, lo clona automáticamente.
 # 3. Ofrece instalar las herramientas complementarias de auditoría (aircrack-ng, etc.)
 # 4. Instala dependencias del proyecto con npm.
@@ -41,6 +41,8 @@ elif command -v apt-get &> /dev/null; then
     PKG_MANAGER="apt"
 elif command -v dnf &> /dev/null; then
     PKG_MANAGER="dnf"
+elif command -v zypper &> /dev/null; then
+    PKG_MANAGER="zypper"
 fi
 
 echo -e "${BLUE}[*] Comprobando dependencias del sistema...${NC}"
@@ -48,36 +50,47 @@ echo -e "${BLUE}[*] Comprobando dependencias del sistema...${NC}"
 # 2. Comprobar Node.js
 if ! command -v node &> /dev/null; then
     echo -e "${YELLOW}[!] Node.js no está instalado.${NC}"
-    read -r -p "    ¿Deseas instalar Node.js y npm automáticamente ahora? (s/n): " INSTALL_NODE
+    read -r -p "    ¿Deseas instalar Node.js 24 LTS y npm automáticamente ahora? (s/n): " INSTALL_NODE
     if [[ "$INSTALL_NODE" =~ ^[sSyY]$ ]]; then
         if [ "$PKG_MANAGER" = "pacman" ]; then
             sudo pacman -S --needed nodejs npm
         elif [ "$PKG_MANAGER" = "apt" ]; then
-            echo -e "${BLUE}[*] Instalando Node.js, npm y herramientas de compilación desde repositorios oficiales...${NC}"
-            sudo apt update && sudo apt install -y nodejs npm build-essential
+            echo -e "${BLUE}[*] Configurando repositorio oficial NodeSource Node.js 24 LTS (Debian/Ubuntu/Kali/Parrot)...${NC}"
+            curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
+            sudo apt install -y nodejs build-essential
         elif [ "$PKG_MANAGER" = "dnf" ]; then
+            echo -e "${BLUE}[*] Instalando Node.js y npm vía DNF (Fedora)...${NC}"
             sudo dnf install -y nodejs npm
+        elif [ "$PKG_MANAGER" = "zypper" ]; then
+            echo -e "${BLUE}[*] Instalando Node.js y npm vía Zypper (openSUSE)...${NC}"
+            sudo zypper install -y nodejs npm
         else
             echo -e "${RED}[✗] Gestor de paquetes no soportado para instalación automática.${NC}"
-            echo -e "    Instala Node.js >= 18 manualmente y vuelve a ejecutar este instalador."
+            echo -e "    Instala Node.js >= 22 (recomendado Node.js 24 LTS) manualmente y vuelve a ejecutar este instalador."
             exit 1
         fi
     else
-        echo -e "${RED}[✗] Se requiere Node.js >= 18 para ejecutar airgeddon GUI.${NC}"
+        echo -e "${RED}[✗] Se requiere Node.js >= 22 para ejecutar airgeddon GUI.${NC}"
         exit 1
     fi
 fi
 
 NODE_VER=$(node -v | sed 's/v//' | cut -d. -f1)
 echo -e "${GREEN}[✓] Node.js detectado:${NC} $(node -v)"
-if [ "$NODE_VER" -lt 18 ]; then
-    echo -e "${YELLOW}[!] Advertencia: Tu versión de Node.js ($(node -v)) es inferior a la v18 recomendada.${NC}"
+if [ "$NODE_VER" -lt 22 ]; then
+    echo -e "${YELLOW}[!] Advertencia: Tu versión de Node.js ($(node -v)) está fuera de soporte (requerido >= 22).${NC}"
     if [ "$PKG_MANAGER" = "apt" ]; then
-        read -r -p "    ¿Deseas actualizar a Node.js 20 LTS vía NodeSource? (s/n): " UP_NODE
+        read -r -p "    ¿Deseas actualizar a Node.js 24 LTS vía NodeSource? (s/n): " UP_NODE
         if [[ "$UP_NODE" =~ ^[sSyY]$ ]]; then
-            curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-            sudo apt install -y nodejs
+            curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
+            sudo apt install -y nodejs build-essential
         fi
+    elif [ "$PKG_MANAGER" = "pacman" ]; then
+        echo -e "    Actualiza con: ${YELLOW}sudo pacman -Syu nodejs npm${NC}"
+    elif [ "$PKG_MANAGER" = "dnf" ]; then
+        echo -e "    Actualiza con: ${YELLOW}sudo dnf upgrade nodejs npm${NC}"
+    elif [ "$PKG_MANAGER" = "zypper" ]; then
+        echo -e "    Actualiza con: ${YELLOW}sudo zypper update nodejs npm${NC}"
     fi
 fi
 

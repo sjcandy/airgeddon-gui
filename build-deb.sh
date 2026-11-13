@@ -30,7 +30,7 @@ echo "[*] Generando paquete .deb para Debian / Kali Linux / Ubuntu..."
 if [ ! -d "${SCRIPT_DIR}/node_modules" ] || [ "${SKIP_NPM:-0}" != "1" ]; then
     echo "[*] Compilando dependencias de Node.js..."
     (cd "${SCRIPT_DIR}" && npm ci --omit=dev) || {
-        echo "[!] Error: falló 'npm ci'. Revisa que tengas Node.js >= 18 y las"
+        echo "[!] Error: falló 'npm ci'. Revisa que tengas Node.js >= 22 y las"
         echo "    herramientas de compilación (build-essential, python3)."
         exit 1
     }
@@ -53,7 +53,7 @@ Version: ${PKG_VER}
 Section: net
 Priority: optional
 Architecture: ${PKG_ARCH}
-Depends: nodejs (>= 18.0.0), npm, bash, sudo, iproute2
+Depends: nodejs (>= 22.0.0), npm, bash, sudo, iproute2
 Recommends: aircrack-ng, xterm, curl, iw, ccze, wireless-tools, chromium | brave-browser | google-chrome-stable
 Suggests: python3-pil, mdk4, lighttpd, dnsmasq
 Homepage: https://github.com/sjcandy/airgeddon-gui

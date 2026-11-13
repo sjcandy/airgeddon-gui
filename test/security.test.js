@@ -12,6 +12,7 @@ const os = require('node:os');
 const path = require('node:path');
 const pty = require('node-pty');
 const {
+  server,
   getServerPgid,
   getProcessPgid,
   SERVER_PID,
@@ -19,6 +20,9 @@ const {
   killProcessTree,
   startSession,
   stopSession,
+  stopScan,
+  shutdown,
+  scan,
   session,
   startSudoAbsoluteTimer,
   resetSudoInactivityTimer,
@@ -246,7 +250,11 @@ test('Las credenciales sudo se revocan al alcanzar exactamente el límite máxim
   clearSudoTimers();
 });
 
-test('lockSudoSession revoca credenciales en memoria y ejecuta sudo -k en el kernel (aislado y con ticket activo previo)', async () => {
+// NOTA: Esta prueba es un test unitario hermético y no destructivo.
+// Utiliza un mock en PATH para comprobar que lockSudoSession() ejecuta efectivamente
+// 'sudo -k' y gestiona la transición de estado del ticket, evitando requerir la contraseña
+// real de root del usuario o invalidar las credenciales activas del sistema operativo.
+test('lockSudoSession revoca credenciales en memoria y ejecuta sudo -k (prueba unitaria hermética con mock para verificar transición de ticket)', async () => {
   // Configuración de un entorno aislado para verificar la transición de estado del ticket
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sudo-audit-'));
   const sudoScript = path.join(tempDir, 'sudo');
@@ -301,5 +309,49 @@ test('lockSudoSession revoca credenciales en memoria y ejecuta sudo -k en el ker
   } finally {
     process.env.PATH = oldPath;
     try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
+  }
+});
+
+test('shutdown() invoca stopScan y stopSession({ immediate: true }) garantizando la limpieza del grupo antes del cierre', async () => {
+  const initialPid = process.pid;
+  const witness = spawn('sleep', ['20'], { detached: true });
+  const witnessPid = witness.pid;
+
+  // Iniciar proceso PTY
+  const ptyChild = pty.spawn('bash', ['-c', 'sleep 60 & sleep 60 & wait'], { cols: 80, rows: 24 });
+  const ptyPid = ptyChild.pid;
+  session.pty = ptyChild;
+  session.pid = ptyPid;
+  session.pgid = getProcessPgid(ptyPid) || String(ptyPid);
+  session.running = true;
+
+  // Iniciar proceso simulado de escaneo
+  const scanChild = spawn('sleep', ['60'], { detached: true });
+  scan.proc = scanChild;
+  scan.pid = scanChild.pid;
+  scan.pgid = getProcessPgid(scanChild.pid) || String(scanChild.pid);
+  scan.running = true;
+
+  await new Promise((r) => setTimeout(r, 150));
+
+  // Interceptar temporalmente server.close para no finalizar el runner de tests
+  const originalClose = server.close.bind(server);
+  let closeCalled = false;
+  server.close = (cb) => {
+    closeCalled = true;
+    if (typeof cb === 'function') cb();
+    return server;
+  };
+
+  try {
+    await shutdown({ exit: false });
+    assert.equal(closeCalled, true, 'server.close debe haber sido invocado durante el apagado');
+    assert.throws(() => process.kill(ptyPid, 0), /ESRCH/, 'El proceso PTY debe haber terminado');
+    assert.throws(() => process.kill(scanChild.pid, 0), /ESRCH/, 'El subproceso de escaneo debe haber terminado');
+    assert.doesNotThrow(() => process.kill(witnessPid, 0), 'El testigo ajeno debe seguir vivo');
+    assert.equal(process.pid, initialPid);
+  } finally {
+    server.close = originalClose;
+    try { process.kill(-Number(witnessPid), 'SIGKILL'); } catch {}
   }
 });

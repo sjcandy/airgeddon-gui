@@ -727,6 +727,8 @@ async function stopSession({ immediate = false } = {}) {
 
 const scan = {
   proc: null,
+  pid: null,
+  pgid: null,
   iface: null,
   band: 'abg',
   dir: null,
@@ -938,6 +940,8 @@ async function startScan(iface, band = 'abg') {
     detached: true,
   });
   scan.proc = child;
+  scan.pid = child.pid;
+  scan.pgid = getProcessPgid(child.pid) || String(child.pid);
   scan.running = true;
   scan.startedAt = Date.now();
 
@@ -970,6 +974,8 @@ async function startScan(iface, band = 'abg') {
     const wasStopping = scan.stopping;
     scan.running = false;
     scan.proc = null;
+    scan.pid = null;
+    scan.pgid = null;
     if (scan.timer) { clearInterval(scan.timer); scan.timer = null; }
     if (!wasStopping && code !== 0) {
       scan.error = cleanSudoError(stderr) || `airodump-ng terminó con código ${code}`;
@@ -1008,19 +1014,27 @@ async function startScan(iface, band = 'abg') {
 
 async function stopScan({ silent = false } = {}) {
   if (scan.timer) { clearInterval(scan.timer); scan.timer = null; }
-  if (scan.proc) {
+  if (scan.proc || scan.pid) {
     scan.stopping = true;
     const proc = scan.proc;
-    const procPid = proc.pid;
-    try { proc.kill('SIGINT'); } catch {}
-    setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 1800);
-    // Asegurar que el subproceso airodump-ng y toda su descendencia se detengan
+    const procPid = proc ? proc.pid : scan.pid;
+    const targetPgid = scan.pgid || (procPid ? getProcessPgid(procPid) : '');
+
+    // 1. PRIMERO: Limpiar de forma atómica y recursiva el grupo de procesos y descendientes
+    // mientras las referencias en el kernel están vivas
     if (procPid) {
-      await killProcessTree(procPid, '-2');
-      setTimeout(() => { killProcessTree(procPid, '-9').catch(() => {}); }, 1500);
+      await killProcessTree(procPid, '-2', targetPgid);
+      setTimeout(() => { killProcessTree(procPid, '-9', targetPgid).catch(() => {}); }, 1500);
+    }
+    // 2. SEGUNDO: Finalizar el proceso principal y liberar recursos
+    if (proc) {
+      try { proc.kill('SIGINT'); } catch {}
+      setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 1800);
     }
   }
   scan.proc = null;
+  scan.pid = null;
+  scan.pgid = null;
   scan.running = false;
   if (!silent) {
     logSystem('info', 'Escáner airodump-ng detenido');
@@ -1690,13 +1704,20 @@ wss.on('connection', async (ws, req) => {
 // Arranque y apagado
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function shutdown() {
+async function shutdown({ exit = true } = {}) {
   await stopScan({ silent: true });
-  if (session && session.pty) {
-    try { session.pty.kill(); } catch {}
-  }
-  server.close(() => process.exit(0));
-  setTimeout(() => process.exit(0), 1500);
+  await stopSession({ immediate: true });
+  return new Promise((resolve) => {
+    server.close(() => {
+      if (exit) process.exit(0);
+      resolve();
+    });
+    if (exit) {
+      setTimeout(() => process.exit(0), 1500);
+    } else {
+      setTimeout(resolve, 500);
+    }
+  });
 }
 
 if (require.main === module) {
@@ -1727,6 +1748,7 @@ module.exports = {
   stopSession,
   scan,
   session,
+  shutdown,
   resetSudoInactivityTimer,
   startSudoAbsoluteTimer,
   lockSudoSession,

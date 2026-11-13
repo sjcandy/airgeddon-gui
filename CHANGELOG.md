@@ -39,6 +39,9 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - El botón de tema se traslada exclusivamente a Configuración; la barra superior usa el color de acento.
 
 ### Security
+- Procedimiento de apagado limpio en `shutdown()`: `SIGINT` y `SIGTERM` esperan la resolución de `await stopSession({ immediate: true })` y `await stopScan({ silent: true })`, garantizando la terminación ordenada por PGID de todo el árbol de procesos antes del cierre del servidor.
+- Limpieza defensiva simétrica en `stopScan()`: persistencia de `scan.pgid` y `scan.pid` al arrancar el escaneo con `airodump-ng`, limpiando el grupo de procesos y subprocesos mediante `killProcessTree` antes de destruir la referencia principal.
+- Documentación del test unitario de revocación de sudo: especificación formal en la suite de pruebas como test unitario hermético no destructivo con mock para validar la invocación de `sudo -k` y la transición de estado del ticket.
 - Orden determinista en `stopSession()` y persistencia de PGID: `session.pgid` se registra al instanciarse la sesión PTY, y `stopSession()` ejecuta `killProcessTree()` sobre el grupo y árbol de subprocesos ANTES de destruir la instancia PTY, evitando que los procesos descendientes queden huérfanos.
 - Prueba del ciclo completo de `stopSession()` (`test/security.test.js`): comprueba que una sesión PTY con subprocesos descendientes en segundo plano termina de forma íntegra tanto el proceso principal como todos los hijos, verificando que ni el servidor ni procesos testigos ajenos se vean afectados.
 - Prueba hermética de revocación en kernel con ticket activo previo: demuestra la transición de estado donde un ticket activo confirmado (`sudo -n -v` exitoso) es invalidado en el kernel por `sudo -k` ejecutado en `lockSudoSession()`.

@@ -1,7 +1,23 @@
 'use strict';
 
 /**
- * Pruebas de seguridad, aislamiento de procesos (PGID) y ciclo de vida de credenciales.
+ * Suite de seguridad, aislamiento de procesos (PGID) y ciclo de vida de credenciales.
+ *
+ * Clasificación de la suite de pruebas:
+ *
+ * [PRUEBAS UNITARIAS]:
+ * - Lógica de guardas de seguridad y bloqueo de señales contra el servidor y procesos ajenos.
+ * - Temporizadores en memoria de revocación sudo (expiración por límite absoluto e inactividad).
+ * - Revocación hermética y no destructiva de ticket sudo con mock en PATH para verificar 'sudo -k'.
+ *
+ * [PRUEBAS DE INTEGRACIÓN REAL]:
+ * - Resolución y aislamiento de PGID en el kernel POSIX (/proc y ps) para terminales PTY y escaneo desacoplado.
+ * - Terminación de escaneo desacoplado y supervivencia del servidor Node.js.
+ * - Terminación directa en caliente de terminales PTY y preservación de procesos testigo ajenos.
+ * - Ciclo real de stopSession con terminación atómica de árboles y descendientes en PTY.
+ * - Detención y escalada síncrona de stopScan() ante procesos que ignoran SIGINT.
+ * - Apagado completo del servidor con shutdown({ exit: false }) limpiando árboles completos de
+ *   procesos en escaneo y PTY, verificando la terminación de descendientes y la supervivencia de testigos.
  */
 
 const assert = require('node:assert/strict');
@@ -15,6 +31,7 @@ const {
   server,
   getServerPgid,
   getProcessPgid,
+  isProcessAlive,
   SERVER_PID,
   SERVER_PGID,
   killProcessTree,
@@ -32,7 +49,7 @@ const {
   setSudoPassword,
 } = require('../server.js');
 
-test('El PGID objetivo es distinto del PGID del servidor', async () => {
+test('[INTEGRACIÓN REAL] El PGID objetivo es distinto del PGID del servidor', async () => {
   const serverPgid = getServerPgid();
   assert.ok(serverPgid, 'El PGID del servidor debe ser no vacío');
   assert.equal(typeof serverPgid, 'string');
@@ -61,7 +78,7 @@ test('El PGID objetivo es distinto del PGID del servidor', async () => {
   try { ptyChild.kill('SIGKILL'); } catch {}
 });
 
-test('Detener un escaneo no termina el servidor Node.js', async () => {
+test('[INTEGRACIÓN REAL] Detener un escaneo no termina el servidor Node.js', async () => {
   const initialPid = process.pid;
   const scanChild = spawn('sleep', ['10'], { detached: true });
   assert.ok(scanChild.pid);
@@ -82,7 +99,7 @@ test('Detener un escaneo no termina el servidor Node.js', async () => {
   }, 'El servidor Node.js debe continuar vivo');
 });
 
-test('Detener una sesión PTY en ejecución directa termina el grupo PTY y preserva el servidor y testigos', async () => {
+test('[INTEGRACIÓN REAL] Detener una sesión PTY en ejecución directa termina el grupo PTY y preserva el servidor y testigos', async () => {
   const initialPid = process.pid;
   // Proceso testigo ajeno independiente
   const witness = spawn('sleep', ['15'], { detached: true });
@@ -126,7 +143,7 @@ test('Detener una sesión PTY en ejecución directa termina el grupo PTY y prese
   try { process.kill(-Number(witnessPid), 'SIGKILL'); } catch {}
 });
 
-test('Ciclo real de stopSession termina el proceso principal PTY y todos sus descendientes sin dejar huérfanos', async () => {
+test('[INTEGRACIÓN REAL] Ciclo real de stopSession termina el proceso principal PTY y todos sus descendientes sin dejar huérfanos', async () => {
   const initialPid = process.pid;
   // Proceso testigo ajeno independiente
   const witness = spawn('sleep', ['20'], { detached: true });
@@ -184,7 +201,7 @@ test('Ciclo real de stopSession termina el proceso principal PTY y todos sus des
   try { process.kill(-Number(witnessPid), 'SIGKILL'); } catch {}
 });
 
-test('Ningún proceso ajeno a la ejecución recibe señales y las guardas protegen al servidor', async () => {
+test('[PRUEBA UNITARIA] Ningún proceso ajeno a la ejecución recibe señales y las guardas protegen al servidor', async () => {
   // Proceso ajeno / testigo independiente
   const witness = spawn('sleep', ['10'], { detached: true });
   // Proceso objetivo a terminar
@@ -223,7 +240,7 @@ test('Ningún proceso ajeno a la ejecución recibe señales y las guardas proteg
   try { process.kill(-Number(witnessPid), 'SIGKILL'); } catch {}
 });
 
-test('Las credenciales sudo se revocan al alcanzar exactamente el límite máximo', async () => {
+test('[PRUEBA UNITARIA] Las credenciales sudo se revocan al alcanzar exactamente el límite máximo', async () => {
   clearSudoTimers();
   setSudoPassword('temporal_secret_token');
   assert.equal(getSudoPassword(), 'temporal_secret_token');
@@ -254,7 +271,7 @@ test('Las credenciales sudo se revocan al alcanzar exactamente el límite máxim
 // Utiliza un mock en PATH para comprobar que lockSudoSession() ejecuta efectivamente
 // 'sudo -k' y gestiona la transición de estado del ticket, evitando requerir la contraseña
 // real de root del usuario o invalidar las credenciales activas del sistema operativo.
-test('lockSudoSession revoca credenciales en memoria y ejecuta sudo -k (prueba unitaria hermética con mock para verificar transición de ticket)', async () => {
+test('[PRUEBA UNITARIA] lockSudoSession revoca credenciales en memoria y ejecuta sudo -k (prueba unitaria hermética con mock para verificar transición de ticket)', async () => {
   // Configuración de un entorno aislado para verificar la transición de estado del ticket
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sudo-audit-'));
   const sudoScript = path.join(tempDir, 'sudo');
@@ -312,12 +329,36 @@ test('lockSudoSession revoca credenciales en memoria y ejecuta sudo -k (prueba u
   }
 });
 
-test('shutdown() invoca stopScan y stopSession({ immediate: true }) garantizando la limpieza del grupo antes del cierre', async () => {
+test('[INTEGRACIÓN REAL] stopScan() espera la confirmación de salida y escala síncronamente a SIGKILL si el proceso ignora SIGINT', async () => {
+  // Proceso desacoplado que ignora deliberadamente SIGINT (trap '' INT) y únicamente finaliza con SIGKILL
+  const stubbornScan = spawn('bash', ['-c', 'trap "" INT; sleep 60'], { detached: true });
+  const stubbornPid = stubbornScan.pid;
+  scan.proc = stubbornScan;
+  scan.pid = stubbornPid;
+  scan.pgid = getProcessPgid(stubbornPid) || String(stubbornPid);
+  scan.running = true;
+
+  await new Promise((r) => setTimeout(r, 100));
+  assert.doesNotThrow(() => process.kill(stubbornPid, 0), 'El proceso debe estar vivo inicialmente');
+
+  // Invocar stopScan con una ventana de espera reducida (200 ms) para verificar la escalada
+  await stopScan({ silent: true, timeoutMs: 200 });
+
+  // Al retornar stopScan, la escalada a SIGKILL ya debe haber finalizado y confirmado la muerte del proceso
+  assert.throws(
+    () => process.kill(stubbornPid, 0),
+    /ESRCH/,
+    'stopScan debe esperar y escalar a SIGKILL completando la limpieza antes de retornar el control'
+  );
+  assert.equal(scan.running, false);
+});
+
+test('[INTEGRACIÓN REAL] shutdown() invoca stopScan y stopSession({ immediate: true }) garantizando la limpieza completa de grupos y descendientes antes del cierre', async () => {
   const initialPid = process.pid;
   const witness = spawn('sleep', ['20'], { detached: true });
   const witnessPid = witness.pid;
 
-  // Iniciar proceso PTY
+  // Iniciar proceso PTY con procesos descendientes
   const ptyChild = pty.spawn('bash', ['-c', 'sleep 60 & sleep 60 & wait'], { cols: 80, rows: 24 });
   const ptyPid = ptyChild.pid;
   session.pty = ptyChild;
@@ -325,14 +366,31 @@ test('shutdown() invoca stopScan y stopSession({ immediate: true }) garantizando
   session.pgid = getProcessPgid(ptyPid) || String(ptyPid);
   session.running = true;
 
-  // Iniciar proceso simulado de escaneo
-  const scanChild = spawn('sleep', ['60'], { detached: true });
+  // Iniciar proceso simulado de escaneo desacoplado con procesos descendientes
+  const scanChild = spawn('bash', ['-c', 'sleep 60 & sleep 60 & wait'], { detached: true });
+  const scanPid = scanChild.pid;
   scan.proc = scanChild;
-  scan.pid = scanChild.pid;
-  scan.pgid = getProcessPgid(scanChild.pid) || String(scanChild.pid);
+  scan.pid = scanPid;
+  scan.pgid = getProcessPgid(scanPid) || String(scanPid);
   scan.running = true;
 
-  await new Promise((r) => setTimeout(r, 150));
+  // Esperar a que el kernel registre los procesos descendientes
+  await new Promise((r) => setTimeout(r, 200));
+
+  // Obtener los PIDs de los descendientes de ambos árboles mediante pgrep
+  const pgrepPty = execFileSync('pgrep', ['-P', String(ptyPid)], { encoding: 'utf8' });
+  const ptyDescendants = pgrepPty.trim().split(/\s+/).filter(Boolean);
+  assert.ok(ptyDescendants.length >= 1, 'Deben existir procesos descendientes en el árbol PTY');
+
+  const pgrepScan = execFileSync('pgrep', ['-P', String(scanPid)], { encoding: 'utf8' });
+  const scanDescendants = pgrepScan.trim().split(/\s+/).filter(Boolean);
+  assert.ok(scanDescendants.length >= 1, 'Deben existir procesos descendientes en el árbol de escaneo');
+
+  // Verificar que todos los procesos (principales y descendientes) están vivos antes del apagado
+  assert.doesNotThrow(() => process.kill(ptyPid, 0));
+  for (const cpid of ptyDescendants) assert.doesNotThrow(() => process.kill(Number(cpid), 0));
+  assert.doesNotThrow(() => process.kill(scanPid, 0));
+  for (const cpid of scanDescendants) assert.doesNotThrow(() => process.kill(Number(cpid), 0));
 
   // Interceptar temporalmente server.close para no finalizar el runner de tests
   const originalClose = server.close.bind(server);
@@ -346,10 +404,28 @@ test('shutdown() invoca stopScan y stopSession({ immediate: true }) garantizando
   try {
     await shutdown({ exit: false });
     assert.equal(closeCalled, true, 'server.close debe haber sido invocado durante el apagado');
+
+    // 1. El proceso PTY principal y todos sus descendientes deben haber terminado
     assert.throws(() => process.kill(ptyPid, 0), /ESRCH/, 'El proceso PTY debe haber terminado');
-    assert.throws(() => process.kill(scanChild.pid, 0), /ESRCH/, 'El subproceso de escaneo debe haber terminado');
+    for (const cpid of ptyDescendants) {
+      assert.throws(() => process.kill(Number(cpid), 0), /ESRCH/, `El descendiente PTY ${cpid} debe haber terminado`);
+    }
+
+    // 2. El proceso principal de escaneo y todos sus descendientes deben haber terminado
+    assert.throws(() => process.kill(scanPid, 0), /ESRCH/, 'El proceso principal de escaneo debe haber terminado');
+    for (const cpid of scanDescendants) {
+      assert.throws(
+        () => process.kill(Number(cpid), 0),
+        /ESRCH/,
+        `El proceso descendiente de escaneo ${cpid} debe haber sido terminado por shutdown`
+      );
+    }
+
+    // 3. El proceso testigo ajeno debe seguir vivo
     assert.doesNotThrow(() => process.kill(witnessPid, 0), 'El testigo ajeno debe seguir vivo');
-    assert.equal(process.pid, initialPid);
+
+    // 4. El proceso del servidor Node.js de pruebas debe continuar vivo
+    assert.equal(process.pid, initialPid, 'El servidor de pruebas debe mantenerse vivo');
   } finally {
     server.close = originalClose;
     try { process.kill(-Number(witnessPid), 'SIGKILL'); } catch {}

@@ -73,6 +73,19 @@ function getProcessPgid(pid) {
   return '';
 }
 
+/**
+ * Comprueba si un proceso sigue existiendo en el kernel mediante señal 0.
+ */
+function isProcessAlive(pid) {
+  if (!pid) return false;
+  try {
+    process.kill(Number(pid), 0);
+    return true;
+  } catch (err) {
+    return err.code === 'EPERM';
+  }
+}
+
 const SERVER_PID = String(process.pid);
 const SERVER_PGID = getServerPgid();
 
@@ -1012,7 +1025,7 @@ async function startScan(iface, band = 'abg') {
   return scanSnapshot();
 }
 
-async function stopScan({ silent = false } = {}) {
+async function stopScan({ silent = false, immediate = false, timeoutMs = 1500 } = {}) {
   if (scan.timer) { clearInterval(scan.timer); scan.timer = null; }
   if (scan.proc || scan.pid) {
     scan.stopping = true;
@@ -1020,16 +1033,31 @@ async function stopScan({ silent = false } = {}) {
     const procPid = proc ? proc.pid : scan.pid;
     const targetPgid = scan.pgid || (procPid ? getProcessPgid(procPid) : '');
 
-    // 1. PRIMERO: Limpiar de forma atómica y recursiva el grupo de procesos y descendientes
-    // mientras las referencias en el kernel están vivas
+    // 1. Limpieza de procesos y descendientes
     if (procPid) {
-      await killProcessTree(procPid, '-2', targetPgid);
-      setTimeout(() => { killProcessTree(procPid, '-9', targetPgid).catch(() => {}); }, 1500);
-    }
-    // 2. SEGUNDO: Finalizar el proceso principal y liberar recursos
-    if (proc) {
-      try { proc.kill('SIGINT'); } catch {}
-      setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 1800);
+      if (immediate) {
+        // En terminación inmediata (ej. shutdown), terminar el grupo directamente con SIGKILL sin esperas
+        await killProcessTree(procPid, '-9', targetPgid);
+        if (proc) { try { proc.kill('SIGKILL'); } catch {} }
+      } else {
+        // En terminación ordenada: primero solicitar detención mediante SIGINT (-2)
+        await killProcessTree(procPid, '-2', targetPgid);
+        if (proc) { try { proc.kill('SIGINT'); } catch {} }
+
+        // Esperar confirmación de terminación del proceso hasta timeoutMs
+        const startTime = Date.now();
+        let alive = isProcessAlive(procPid);
+        while (alive && (Date.now() - startTime) < timeoutMs) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          alive = isProcessAlive(procPid);
+        }
+
+        // Si continúa vivo tras la ventana de espera, escalar de forma síncrona a SIGKILL (-9)
+        if (alive) {
+          await killProcessTree(procPid, '-9', targetPgid);
+          if (proc) { try { proc.kill('SIGKILL'); } catch {} }
+        }
+      }
     }
   }
   scan.proc = null;
@@ -1705,7 +1733,7 @@ wss.on('connection', async (ws, req) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function shutdown({ exit = true } = {}) {
-  await stopScan({ silent: true });
+  await stopScan({ silent: true, immediate: true });
   await stopSession({ immediate: true });
   return new Promise((resolve) => {
     server.close(() => {
@@ -1739,6 +1767,7 @@ module.exports = {
   server,
   getServerPgid,
   getProcessPgid,
+  isProcessAlive,
   SERVER_PID,
   SERVER_PGID,
   killProcessTree,

@@ -483,12 +483,17 @@ const session = {
   pid: null,
   pgid: null,
   running: false,
+  starting: false,
+  generation: 0,
   startedAt: null,
   buffer: '',
   exitCode: null,
   cols: 120,
   rows: 40,
 };
+
+let sessionStartingPromise = null;
+let sessionGeneration = 0;
 
 function sessionSnapshot() {
   return {
@@ -520,93 +525,124 @@ function redactUrlCredentials(url) {
 }
 
 async function startSession({ cols = 120, rows = 40 } = {}) {
-  if (session.running) {
-    const err = new Error('Ya hay una sesión de airgeddon en ejecución');
+  if (session.running || session.starting || sessionStartingPromise) {
+    const err = new Error('Ya hay una sesión de airgeddon en ejecución o en proceso de inicio');
     err.code = 'ALREADY_RUNNING';
     throw err;
   }
-  if (!fs.existsSync(AIRGEDDON_SCRIPT)) {
-    const err = new Error(`No se encontró airgeddon.sh en ${AIRGEDDON_SCRIPT}`);
-    err.code = 'SCRIPT_NOT_FOUND';
-    throw err;
-  }
 
-  const passwordless = await sudoWorksWithoutPassword();
-  if (!passwordless) {
-    if (!sudoPassword) {
-      const err = new Error('Se requiere autenticación sudo');
-      err.code = 'AUTH_REQUIRED';
-      throw err;
+  // Bloqueo atómico inmediato antes de cualquier operación asíncrona
+  session.starting = true;
+  const currentGen = ++sessionGeneration;
+  session.generation = currentGen;
+
+  const runStartup = async () => {
+    try {
+      if (!fs.existsSync(AIRGEDDON_SCRIPT)) {
+        const err = new Error(`No se encontró airgeddon.sh en ${AIRGEDDON_SCRIPT}`);
+        err.code = 'SCRIPT_NOT_FOUND';
+        throw err;
+      }
+
+      const passwordless = await sudoWorksWithoutPassword();
+      if (!passwordless) {
+        if (!sudoPassword) {
+          const err = new Error('Se requiere autenticación sudo');
+          err.code = 'AUTH_REQUIRED';
+          throw err;
+        }
+        // Comprueba que la contraseña guardada siga siendo válida antes de lanzar
+        // airgeddon; si caducó, la GUI pedirá autenticarse de nuevo en vez de
+        // mostrar un cierre de sesión sin explicación.
+        const check = await sudoWithPassword(['-v'], sudoPassword, { timeout: 10000 });
+        if (!check.ok) {
+          const err = new Error('La contraseña de sudo ha caducado');
+          err.code = 'AUTH_REQUIRED';
+          throw err;
+        }
+      }
+
+      // Si la sesión cambió de generación durante los chequeos asíncronos, abortar
+      if (session.generation !== currentGen) {
+        const err = new Error('El inicio de sesión fue cancelado o reemplazado');
+        err.code = 'SESSION_SUPERSEDED';
+        throw err;
+      }
+
+      session.cols = Math.max(20, Math.min(400, Number(cols) || 120));
+      session.rows = Math.max(10, Math.min(200, Number(rows) || 40));
+      session.buffer = '';
+      session.exitCode = null;
+
+      const args = passwordless
+        ? ['-n', 'bash', AIRGEDDON_SCRIPT]
+        : ['-k', '-S', '-p', '', 'bash', AIRGEDDON_SCRIPT];
+
+      const child = pty.spawn('sudo', args, {
+        name: 'xterm-256color',
+        cols: session.cols,
+        rows: session.rows,
+        cwd: AIRGEDDON_DIR,
+        env: {
+          ...process.env,
+          TERM: 'xterm-256color',
+          LANG: process.env.LANG || 'es_MX.UTF-8',
+          LC_ALL: process.env.LC_ALL || process.env.LANG || 'es_MX.UTF-8',
+        },
+      });
+
+      child.generation = currentGen;
+      session.pty = child;
+      session.pid = child.pid;
+      session.pgid = getProcessPgid(child.pid) || String(child.pid);
+      session.running = true;
+      session.startedAt = Date.now();
+
+      if (!passwordless && sudoPassword) {
+        // sudo -k fuerza el prompt, así la contraseña siempre es consumida por sudo
+        // y nunca llega al stdin de airgeddon.
+        setTimeout(() => {
+          try {
+            if (session.generation === currentGen && session.pty === child) {
+              child.write(`${sudoPassword}\n`);
+            }
+          } catch {}
+        }, 180);
+      }
+
+      child.onData((data) => {
+        if (session.generation !== currentGen) return;
+        const clean = redact(data);
+        session.buffer = (session.buffer + clean).slice(-MAX_BUFFER);
+        broadcast({ type: 'output', data: clean });
+      });
+
+      child.onExit(({ exitCode }) => {
+        if (session.generation === currentGen) {
+          session.running = false;
+          session.exitCode = exitCode;
+          session.pty = null;
+          session.pid = null;
+          session.pgid = null;
+          logSystem('info', `Sesión de airgeddon finalizada (código ${exitCode})`);
+          broadcast({ type: 'exit', code: exitCode });
+          broadcast({ type: 'session', session: sessionSnapshot() });
+        }
+      });
+
+      logSystem('cmd', 'sudo bash airgeddon.sh');
+      logSystem('info', `Sesión de airgeddon iniciada en terminal PTY (${session.cols}x${session.rows})`);
+      broadcast({ type: 'started', startedAt: session.startedAt });
+      broadcast({ type: 'session', session: sessionSnapshot() });
+      return sessionSnapshot();
+    } finally {
+      session.starting = false;
+      sessionStartingPromise = null;
     }
-    // Comprueba que la contraseña guardada siga siendo válida antes de lanzar
-    // airgeddon; si caducó, la GUI pedirá autenticarse de nuevo en vez de
-    // mostrar un cierre de sesión sin explicación.
-    const check = await sudoWithPassword(['-v'], sudoPassword, { timeout: 10000 });
-    if (!check.ok) {
-      const err = new Error('La contraseña de sudo ha caducado');
-      err.code = 'AUTH_REQUIRED';
-      throw err;
-    }
-  }
+  };
 
-  session.cols = Math.max(20, Math.min(400, Number(cols) || 120));
-  session.rows = Math.max(10, Math.min(200, Number(rows) || 40));
-  session.buffer = '';
-  session.exitCode = null;
-
-  const args = passwordless
-    ? ['-n', 'bash', AIRGEDDON_SCRIPT]
-    : ['-k', '-S', '-p', '', 'bash', AIRGEDDON_SCRIPT];
-
-  const child = pty.spawn('sudo', args, {
-    name: 'xterm-256color',
-    cols: session.cols,
-    rows: session.rows,
-    cwd: AIRGEDDON_DIR,
-    env: {
-      ...process.env,
-      TERM: 'xterm-256color',
-      LANG: process.env.LANG || 'es_MX.UTF-8',
-      LC_ALL: process.env.LC_ALL || process.env.LANG || 'es_MX.UTF-8',
-    },
-  });
-
-  session.pty = child;
-  session.pid = child.pid;
-  session.pgid = getProcessPgid(child.pid) || String(child.pid);
-  session.running = true;
-  session.startedAt = Date.now();
-
-  if (!passwordless && sudoPassword) {
-    // sudo -k fuerza el prompt, así la contraseña siempre es consumida por sudo
-    // y nunca llega al stdin de airgeddon.
-    setTimeout(() => {
-      try { child.write(`${sudoPassword}\n`); } catch {}
-    }, 180);
-  }
-
-  child.onData((data) => {
-    const clean = redact(data);
-    session.buffer = (session.buffer + clean).slice(-MAX_BUFFER);
-    broadcast({ type: 'output', data: clean });
-  });
-
-  child.onExit(({ exitCode }) => {
-    session.running = false;
-    session.exitCode = exitCode;
-    session.pty = null;
-    session.pid = null;
-    session.pgid = null;
-    logSystem('info', `Sesión de airgeddon finalizada (código ${exitCode})`);
-    broadcast({ type: 'exit', code: exitCode });
-    broadcast({ type: 'session', session: sessionSnapshot() });
-  });
-
-  logSystem('cmd', 'sudo bash airgeddon.sh');
-  logSystem('info', `Sesión de airgeddon iniciada en terminal PTY (${session.cols}x${session.rows})`);
-  broadcast({ type: 'started', startedAt: session.startedAt });
-  broadcast({ type: 'session', session: sessionSnapshot() });
-  return sessionSnapshot();
+  sessionStartingPromise = runStartup();
+  return sessionStartingPromise;
 }
 
 /**
@@ -684,28 +720,39 @@ async function killProcessTree(rootPid, signal = '-9', knownPgid = '') {
 }
 
 async function stopSession({ immediate = false } = {}) {
-  if (!session.pty && !session.pid) return;
+  // Idempotente: si no hay pty, pid ni sesión iniciándose, no hacer nada
+  if (!session.pty && !session.pid && !session.starting) return;
   logSystem('info', 'Deteniendo sesión de airgeddon (Ctrl+C y confirmación de salida)...');
+
+  // Capturar la generación e instancia de proceso objetivo de forma inmutable
+  const targetGen = session.generation;
   const child = session.pty;
   const childPid = child ? child.pid : session.pid;
   const targetPgid = session.pgid || (childPid ? getProcessPgid(childPid) : '');
 
+  if (child) child._stopping = true;
+
   const cleanupProcessTree = async () => {
-    // 1. PRIMERO: Terminar de forma atómica y recursiva el grupo de procesos y todos sus descendientes
-    // mientras los procesos e identificadores PGID/PID siguen vivos en el kernel
+    // 1. Terminar el grupo de procesos de esta generación en el kernel
     if (childPid) {
       await killProcessTree(childPid, '-9', targetPgid);
     }
-    // 2. SEGUNDO: Destruir la instancia PTY y liberar recursos
-    if (session.pty) {
+    // 2. Destruir la instancia PTY específica de esta generación
+    if (child) {
       try { child.kill('SIGKILL'); } catch {}
-      session.pty = null;
+      child._destroyed = true;
     }
-    session.running = false;
-    session.pid = null;
-    session.pgid = null;
-    broadcast({ type: 'exit', code: 0 });
-    broadcast({ type: 'session', session: sessionSnapshot() });
+    // 3. Modificar el estado global ÚNICAMENTE si la generación actual sigue siendo targetGen
+    // Evita sobrescribir o limpiar una sesión nueva iniciada concurrentemente
+    if (session.generation === targetGen) {
+      session.running = false;
+      session.starting = false;
+      session.pty = null;
+      session.pid = null;
+      session.pgid = null;
+      broadcast({ type: 'exit', code: 0 });
+      broadcast({ type: 'session', session: sessionSnapshot() });
+    }
   };
 
   if (immediate) {
@@ -716,12 +763,18 @@ async function stopSession({ immediate = false } = {}) {
   if (child) {
     try { child.write('\x03'); } catch {}
   }
-  // Responder automáticamente al prompt de salida: "Detectada interrupción. ¿Quieres realmente salir del script? [Y/n]"
+
+  // Responder al prompt de salida enviando 'y\n' EXCLUSIVAMENTE a la instancia que se está deteniendo
   setTimeout(() => {
-    try { if (session.pty) session.pty.write('y\n'); } catch {}
+    try {
+      if (child && !child._destroyed && child._stopping) child.write('y\n');
+    } catch {}
   }, 120);
+
   setTimeout(() => {
-    try { if (session.pty) session.pty.write('y\n'); } catch {}
+    try {
+      if (child && !child._destroyed && child._stopping) child.write('y\n');
+    } catch {}
   }, 350);
 
   return new Promise((resolve) => {
@@ -742,6 +795,7 @@ const scan = {
   proc: null,
   pid: null,
   pgid: null,
+  generation: 0,
   iface: null,
   band: 'abg',
   dir: null,
@@ -753,6 +807,16 @@ const scan = {
   timer: null,
   stopping: false,
 };
+
+let scanOperationQueue = Promise.resolve();
+let scanGenCounter = 0;
+const activeScanDirs = new Set();
+
+function enqueueScanOperation(fn) {
+  const op = scanOperationQueue.then(() => fn(), () => fn());
+  scanOperationQueue = op.catch(() => {});
+  return op;
+}
 
 function scanSnapshot() {
   return {
@@ -916,116 +980,142 @@ async function readScanCsv() {
 }
 
 async function startScan(iface, band = 'abg') {
-  if (!iface || !/^[a-zA-Z0-9_.:-]+$/.test(iface)) {
-    const err = new Error('Interfaz no válida');
-    err.code = 'BAD_IFACE';
-    throw err;
-  }
-  if (!['abg', 'bg', 'a', 'b', 'g'].includes(band)) band = 'abg';
+  return enqueueScanOperation(async () => {
+    if (!iface || !/^[a-zA-Z0-9_.:-]+$/.test(iface)) {
+      const err = new Error('Interfaz no válida');
+      err.code = 'BAD_IFACE';
+      throw err;
+    }
+    if (!['abg', 'bg', 'a', 'b', 'g'].includes(band)) band = 'abg';
 
-  await stopScan({ silent: true });
+    // Detener síncronamente cualquier escaneo anterior
+    await internalStopScan({ silent: true, immediate: true });
 
-  scan.iface = iface;
-  scan.band = band;
-  scan.aps = new Map();
-  scan.stations = new Map();
-  scan.error = null;
-  scan.stopping = false;
-  scan.dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'airgeddon-gui-scan-'));
+    // Limpiar cualquier directorio temporal huérfano previo
+    for (const oldDir of activeScanDirs) {
+      if (oldDir !== scan.dir) {
+        activeScanDirs.delete(oldDir);
+        fsp.rm(oldDir, { recursive: true, force: true }).catch(() => {});
+      }
+    }
 
-  const passwordless = await sudoWorksWithoutPassword();
-  if (!passwordless && !sudoPassword) {
-    const err = new Error('Se requiere autenticación sudo');
-    err.code = 'AUTH_REQUIRED';
-    throw err;
-  }
+    const currentGen = ++scanGenCounter;
+    scan.generation = currentGen;
+    scan.iface = iface;
+    scan.band = band;
+    scan.aps = new Map();
+    scan.stations = new Map();
+    scan.error = null;
+    scan.stopping = false;
 
-  const args = passwordless
-    ? ['-n', 'airodump-ng', '--write-interval', '1', '--output-format', 'csv', '--write', path.join(scan.dir, 'scan'), '--band', band, iface]
-    : ['-k', '-S', '-p', '', 'airodump-ng', '--write-interval', '1', '--output-format', 'csv', '--write', path.join(scan.dir, 'scan'), '--band', band, iface];
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'airgeddon-gui-scan-'));
+    activeScanDirs.add(tmpDir);
+    scan.dir = tmpDir;
 
-  logSystem('cmd', `sudo airodump-ng --write-interval 1 --output-format csv --band ${band} ${iface}`);
-  logSystem('info', `Escáner airodump-ng iniciado en interfaz ${iface} (banda ${band})`);
+    const passwordless = await sudoWorksWithoutPassword();
+    if (!passwordless && !sudoPassword) {
+      activeScanDirs.delete(tmpDir);
+      fsp.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+      const err = new Error('Se requiere autenticación sudo');
+      err.code = 'AUTH_REQUIRED';
+      throw err;
+    }
 
-  const child = spawn('sudo', args, {
-    env: { ...process.env, LANG: process.env.LANG || 'es_MX.UTF-8' },
-    stdio: ['pipe', 'pipe', 'pipe'],
-    detached: true,
-  });
-  scan.proc = child;
-  scan.pid = child.pid;
-  scan.pgid = getProcessPgid(child.pid) || String(child.pid);
-  scan.running = true;
-  scan.startedAt = Date.now();
+    const args = passwordless
+      ? ['-n', 'airodump-ng', '--write-interval', '1', '--output-format', 'csv', '--write', path.join(tmpDir, 'scan'), '--band', band, iface]
+      : ['-k', '-S', '-p', '', 'airodump-ng', '--write-interval', '1', '--output-format', 'csv', '--write', path.join(tmpDir, 'scan'), '--band', band, iface];
 
-  let stderr = '';
-  child.stdout.on('data', () => {});
-  child.stderr.on('data', (d) => {
-    stderr += d.toString();
-    if (stderr.length > 8000) stderr = stderr.slice(-8000);
-  });
+    logSystem('cmd', `sudo airodump-ng --write-interval 1 --output-format csv --band ${band} ${iface}`);
+    logSystem('info', `Escáner airodump-ng iniciado en interfaz ${iface} (banda ${band})`);
 
-  if (!passwordless && sudoPassword) {
-    setTimeout(() => {
-      try { child.stdin.write(`${sudoPassword}\n`); child.stdin.end(); } catch {}
-    }, 120);
-  } else {
-    try { child.stdin.end(); } catch {}
-  }
+    const child = spawn('sudo', args, {
+      env: { ...process.env, LANG: process.env.LANG || 'es_MX.UTF-8' },
+      stdio: ['pipe', 'pipe', 'pipe'],
+      detached: true,
+    });
+    child.generation = currentGen;
+    scan.proc = child;
+    scan.pid = child.pid;
+    scan.pgid = getProcessPgid(child.pid) || String(child.pid);
+    scan.running = true;
+    scan.startedAt = Date.now();
 
-  child.on('error', (err) => {
-    if (scan.proc !== child) return;
-    scan.error = err.message;
-    scan.running = false;
-    if (scan.timer) { clearInterval(scan.timer); scan.timer = null; }
-    broadcast({ type: 'scan-status', running: false, iface: scan.iface, error: scan.error });
-  });
+    let stderr = '';
+    child.stdout.on('data', () => {});
+    child.stderr.on('data', (d) => {
+      if (child.generation !== scan.generation) return;
+      stderr += d.toString();
+      if (stderr.length > 8000) stderr = stderr.slice(-8000);
+    });
 
-  child.on('close', (code) => {
-    // Ignora el cierre de un proceso antiguo si ya se lanzó otro escaneo.
-    if (scan.proc !== child) return;
-    const wasStopping = scan.stopping;
-    scan.running = false;
-    scan.proc = null;
-    scan.pid = null;
-    scan.pgid = null;
-    if (scan.timer) { clearInterval(scan.timer); scan.timer = null; }
-    if (!wasStopping && code !== 0) {
-      scan.error = cleanSudoError(stderr) || `airodump-ng terminó con código ${code}`;
-      broadcast({ type: 'scan-status', running: false, iface: scan.iface, error: scan.error });
+    if (!passwordless && sudoPassword) {
+      setTimeout(() => {
+        try {
+          if (child.generation === scan.generation) {
+            child.stdin.write(`${sudoPassword}\n`);
+            child.stdin.end();
+          }
+        } catch {}
+      }, 120);
     } else {
-      broadcast({ type: 'scan-status', running: false, iface: scan.iface, error: null });
+      try { child.stdin.end(); } catch {}
     }
-    const dir = scan.dir;
-    scan.dir = null;
-    if (dir) setTimeout(() => { fsp.rm(dir, { recursive: true, force: true }).catch(() => {}); }, 4000);
+
+    child.on('error', (err) => {
+      if (child.generation !== scan.generation) return;
+      scan.error = err.message;
+      scan.running = false;
+      if (scan.timer) { clearInterval(scan.timer); scan.timer = null; }
+      broadcast({ type: 'scan-status', running: false, iface: scan.iface, error: scan.error });
+    });
+
+    child.on('close', (code) => {
+      // Ignorar el cierre de un proceso antiguo si ya existe otra generación activa
+      if (child.generation !== scan.generation) return;
+      const wasStopping = scan.stopping;
+      scan.running = false;
+      scan.proc = null;
+      scan.pid = null;
+      scan.pgid = null;
+      if (scan.timer) { clearInterval(scan.timer); scan.timer = null; }
+      if (!wasStopping && code !== 0) {
+        scan.error = cleanSudoError(stderr) || `airodump-ng terminó con código ${code}`;
+        broadcast({ type: 'scan-status', running: false, iface: scan.iface, error: scan.error });
+      } else {
+        broadcast({ type: 'scan-status', running: false, iface: scan.iface, error: null });
+      }
+      activeScanDirs.delete(tmpDir);
+      setTimeout(() => { fsp.rm(tmpDir, { recursive: true, force: true }).catch(() => {}); }, 4000);
+    });
+
+    scan.timer = setInterval(readScanCsv, 1000);
+    await new Promise((r) => setTimeout(r, 500));
+
+    // Si airodump-ng murió al arrancar (interfaz no válida, sin monitor, etc.)
+    // no se debe anunciar un escaneo activo.
+    if (!scan.running || !scan.proc || child.generation !== scan.generation) {
+      if (scan.timer) { clearInterval(scan.timer); scan.timer = null; }
+      const message = scan.error || cleanSudoError(stderr) || 'airodump-ng no pudo iniciarse';
+      activeScanDirs.delete(tmpDir);
+      fsp.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+      const err = new Error(message);
+      err.code = 'SCAN_START_FAILED';
+      throw err;
+    }
+
+    await readScanCsv();
+    broadcast({ type: 'scan-status', running: true, iface: scan.iface, error: null });
+    broadcastScan();
+    return scanSnapshot();
   });
-
-  scan.timer = setInterval(readScanCsv, 1000);
-  await new Promise((r) => setTimeout(r, 500));
-
-  // Si airodump-ng murió al arrancar (interfaz no válida, sin monitor, etc.)
-  // no se debe anunciar un escaneo activo.
-  if (!scan.running || !scan.proc) {
-    if (scan.timer) { clearInterval(scan.timer); scan.timer = null; }
-    const message = scan.error || cleanSudoError(stderr) || 'airodump-ng no pudo iniciarse';
-    if (scan.dir) {
-      const dir = scan.dir;
-      scan.dir = null;
-      fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
-    }
-    const err = new Error(message);
-    err.code = 'SCAN_START_FAILED';
-    throw err;
-  }
-
-  await readScanCsv();
-  broadcast({ type: 'scan-status', running: true, iface: scan.iface, error: null });
-  broadcastScan();
-  return scanSnapshot();
 }
 
-async function stopScan({ silent = false, immediate = false, timeoutMs = 1500, cleanupDelayMs = 0 } = {}) {
+async function stopScan(opts = {}) {
+  return enqueueScanOperation(() => internalStopScan(opts));
+}
+
+async function internalStopScan({ silent = false, immediate = false, timeoutMs = 1500, cleanupDelayMs = 0 } = {}) {
+  const targetGen = scan.generation;
   if (scan.timer) { clearInterval(scan.timer); scan.timer = null; }
   if (scan.proc || scan.pid) {
     scan.stopping = true;
@@ -1064,18 +1154,26 @@ async function stopScan({ silent = false, immediate = false, timeoutMs = 1500, c
       }
     }
   }
-  scan.proc = null;
-  scan.pid = null;
-  scan.pgid = null;
-  scan.running = false;
-  if (!silent) {
-    logSystem('info', 'Escáner airodump-ng detenido');
-    broadcast({ type: 'scan-status', running: false, iface: scan.iface, error: null });
+
+  // Modificar el estado global únicamente si no ha comenzado una nueva generación
+  if (scan.generation === targetGen) {
+    scan.proc = null;
+    scan.pid = null;
+    scan.pgid = null;
+    scan.running = false;
+    if (!silent) {
+      logSystem('info', 'Escáner airodump-ng detenido');
+      broadcast({ type: 'scan-status', running: false, iface: scan.iface, error: null });
+    }
   }
+
   const dir = scan.dir;
-  scan.dir = null;
+  if (scan.generation === targetGen) {
+    scan.dir = null;
+  }
   if (dir) {
-    setTimeout(() => { fsp.rm(dir, { recursive: true, force: true }).catch(() => {}); }, 5000);
+    activeScanDirs.delete(dir);
+    setTimeout(() => { fsp.rm(dir, { recursive: true, force: true }).catch(() => {}); }, 1500);
   }
 }
 
@@ -1393,12 +1491,24 @@ function resetSudoInactivityTimer() {
   }
 }
 
+let activeAuthInFlight = 0;
+const MAX_CONCURRENT_AUTH = 1;
+
 function getAuthRecord(ip) {
+  const now = Date.now();
+  // Limpieza periódica de registros caducados para evitar fugas de memoria
+  if (authAttemptsByIp.size > 200) {
+    for (const [k, v] of authAttemptsByIp.entries()) {
+      if (now > v.expiresAt) authAttemptsByIp.delete(k);
+    }
+  }
+
   let rec = authAttemptsByIp.get(ip);
   if (!rec) {
-    rec = { attempts: 0, lockedUntil: 0 };
+    rec = { attempts: 0, lockedUntil: 0, inFlight: 0, expiresAt: now + 3600000 };
     authAttemptsByIp.set(ip, rec);
   }
+  rec.expiresAt = now + 3600000;
   return rec;
 }
 
@@ -1406,6 +1516,7 @@ app.post('/api/auth', async (req, res) => {
   const clientIp = req.ip || req.socket?.remoteAddress || '127.0.0.1';
   const rec = getAuthRecord(clientIp);
 
+  // 1. Comprobación de bloqueo temporal previo
   if (Date.now() < rec.lockedUntil) {
     const remainingSec = Math.ceil((rec.lockedUntil - Date.now()) / 1000);
     return res.status(429).json({
@@ -1414,33 +1525,50 @@ app.post('/api/auth', async (req, res) => {
     });
   }
 
-  // Retardo defensivo de 500 ms contra ataques de fuerza bruta y análisis de tiempos
-  await new Promise((r) => setTimeout(r, 500));
-
-  const password = typeof req.body?.password === 'string' ? req.body.password : '';
-  if (!password) return res.status(400).json({ error: 'Escribe tu contraseña' });
-  if (password.length > 512 || password.includes('\n') || password.includes('\r')) {
-    return res.status(400).json({ error: 'Contraseña no válida' });
-  }
-  const result = await sudoWithPassword(['-v'], password, { timeout: 10000 });
-  if (result.ok) {
-    sudoPassword = password;
-    sudoAuthenticatedAt = Date.now();
-    rec.attempts = 0;
-    rec.lockedUntil = 0;
-    resetSudoInactivityTimer();
-    startSudoAbsoluteTimer(SUDO_MAX_LIFETIME_MS);
-    return res.json({ ok: true });
+  // 2. Control estricto de concurrencia: evitar que peticiones paralelas eludan la tasa de intentos
+  if (rec.inFlight > 0 || activeAuthInFlight >= MAX_CONCURRENT_AUTH) {
+    return res.status(429).json({
+      error: 'Ya hay una solicitud de autenticación en curso. Espera un momento.',
+      code: 'AUTH_CONCURRENT',
+    });
   }
 
-  rec.attempts++;
-  if (rec.attempts >= 5) {
-    rec.lockedUntil = Date.now() + 60000; // Bloqueo temporal de 60 segundos por IP
-    rec.attempts = 0;
-    logSystem('warn', `Bloqueo temporal de autenticación activado tras 5 intentos fallidos desde ${clientIp}`);
-  }
+  // Reservar el intento de forma atómica antes de cualquier espera o proceso
+  rec.inFlight++;
+  activeAuthInFlight++;
 
-  res.status(401).json({ error: cleanSudoError(result.stderr) || 'Contraseña incorrecta' });
+  try {
+    // Retardo defensivo de 500 ms contra ataques de fuerza bruta y análisis de tiempos
+    await new Promise((r) => setTimeout(r, 500));
+
+    const password = typeof req.body?.password === 'string' ? req.body.password : '';
+    if (!password) return res.status(400).json({ error: 'Escribe tu contraseña' });
+    if (password.length > 512 || password.includes('\n') || password.includes('\r')) {
+      return res.status(400).json({ error: 'Contraseña no válida' });
+    }
+    const result = await sudoWithPassword(['-v'], password, { timeout: 10000 });
+    if (result.ok) {
+      sudoPassword = password;
+      sudoAuthenticatedAt = Date.now();
+      rec.attempts = 0;
+      rec.lockedUntil = 0;
+      resetSudoInactivityTimer();
+      startSudoAbsoluteTimer(SUDO_MAX_LIFETIME_MS);
+      return res.json({ ok: true });
+    }
+
+    rec.attempts++;
+    if (rec.attempts >= 5) {
+      rec.lockedUntil = Date.now() + 60000; // Bloqueo temporal de 60 segundos por IP
+      rec.attempts = 0;
+      logSystem('warn', `Bloqueo temporal de autenticación activado tras 5 intentos fallidos desde ${clientIp}`);
+    }
+
+    res.status(401).json({ error: cleanSudoError(result.stderr) || 'Contraseña incorrecta' });
+  } finally {
+    rec.inFlight--;
+    activeAuthInFlight--;
+  }
 });
 
 app.post('/api/lock', async (req, res) => {
@@ -1838,6 +1966,9 @@ module.exports = {
   stopSession,
   scan,
   session,
+  activeScanDirs,
+  authAttemptsByIp,
+  SESSION_TOKEN,
   shutdown,
   resetSudoInactivityTimer,
   startSudoAbsoluteTimer,

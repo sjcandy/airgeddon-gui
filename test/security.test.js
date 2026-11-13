@@ -37,10 +37,14 @@ const {
   killProcessTree,
   startSession,
   stopSession,
+  startScan,
   stopScan,
   shutdown,
   scan,
   session,
+  activeScanDirs,
+  authAttemptsByIp,
+  SESSION_TOKEN,
   startSudoAbsoluteTimer,
   resetSudoInactivityTimer,
   lockSudoSession,
@@ -501,5 +505,156 @@ test('[INTEGRACIÓN REAL] shutdown() espera la finalización completa cuando la 
     server.close = originalClose;
     try { process.kill(-Number(witnessPid), 'SIGKILL'); } catch {}
     try { process.kill(-Number(scanPid), 'SIGKILL'); } catch {}
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Pruebas de Concurrencia y Aislamiento de Generaciones
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('[CONCURRENCIA] Dos solicitudes startSession simultáneas son serializadas/bloqueadas sin duplicar PTYs ni dejar huérfanos', async () => {
+  await stopSession({ immediate: true });
+
+  // Iniciar dos llamadas simultáneas a startSession
+  // Una debe proceder con el inicio y la otra debe ser rechazada de inmediato con ALREADY_RUNNING
+  const results = await Promise.allSettled([
+    startSession({ cols: 80, rows: 24 }),
+    startSession({ cols: 80, rows: 24 }),
+  ]);
+
+  const rejectedWithAlreadyRunning = results.filter(
+    (r) => r.status === 'rejected' && r.reason?.code === 'ALREADY_RUNNING'
+  );
+  assert.equal(
+    rejectedWithAlreadyRunning.length,
+    1,
+    'Exactamente una de las solicitudes concurrentes debe ser rechazada con ALREADY_RUNNING'
+  );
+
+  // Limpieza de cualquier sesión iniciada
+  await stopSession({ immediate: true });
+  assert.equal(session.running, false);
+  assert.equal(session.pty, null);
+});
+
+test('[CONCURRENCIA] Dos solicitudes startScan simultáneas son serializadas en cola única sin dejar procesos ni directorios huérfanos', async () => {
+  await stopScan({ immediate: true });
+
+  // Ejecutar dos startScan simultáneos: pasan por la cola serializada enqueueScanOperation
+  const results = await Promise.allSettled([
+    startScan('lo', 'abg'),
+    startScan('lo', 'abg'),
+  ]);
+
+  // Una vez concluidas las operaciones concurrentes:
+  if (scan.running) {
+    assert.ok(scan.proc, 'Debe haber como máximo un único proceso de escaneo activo');
+    const runningPid = scan.pid;
+    assert.doesNotThrow(() => process.kill(runningPid, 0), 'El proceso asignado debe ser el único en ejecución');
+  }
+
+  // Detener el escaneo de forma inmediata
+  await stopScan({ immediate: true });
+  await new Promise((r) => setTimeout(r, 200));
+
+  // Verificar que el estado queda limpio y sin fugas de directorios temporales
+  assert.equal(scan.running, false);
+  assert.equal(scan.proc, null);
+  assert.equal(activeScanDirs.size, 0, 'No deben quedar directorios temporales huérfanos en activeScanDirs');
+});
+
+test('[CONCURRENCIA] stopSession de generación antigua no interfiere ni destruye una sesión nueva iniciada antes de 1.200 ms', async () => {
+  // Simular sesión de Generación 1
+  const ptyGen1 = pty.spawn('bash', ['-c', 'sleep 30'], { cols: 80, rows: 24 });
+  const pty1Pid = ptyGen1.pid;
+  session.pty = ptyGen1;
+  session.pid = pty1Pid;
+  session.pgid = getProcessPgid(pty1Pid) || String(pty1Pid);
+  session.generation = 1;
+  session.running = true;
+
+  // Invocar stopSession (modo no inmediato, programa temporizadores a 120ms, 350ms, 1200ms)
+  const stopPromise = stopSession({ immediate: false });
+
+  // Inmediatamente (a los 50 ms, mucho antes de los 1.200 ms) simular el inicio de Generación 2
+  await new Promise((r) => setTimeout(r, 50));
+  const ptyGen2 = pty.spawn('bash', ['-c', 'sleep 30'], { cols: 80, rows: 24 });
+  const pty2Pid = ptyGen2.pid;
+  session.pty = ptyGen2;
+  session.pid = pty2Pid;
+  session.pgid = getProcessPgid(pty2Pid) || String(pty2Pid);
+  session.generation = 2;
+  session.running = true;
+
+  // Esperar a que la promesa de stopSession de la Generación 1 termine (tras 1.200 ms)
+  await stopPromise;
+
+  // 1. El proceso de Generación 1 debe haber sido terminado por su limpieza
+  assert.throws(() => process.kill(pty1Pid, 0), /ESRCH/, 'El proceso PTY de Generación 1 debe haber terminado');
+
+  // 2. El proceso de Generación 2 DEBE SEGUIR VIVO e intacto en session
+  assert.doesNotThrow(() => process.kill(pty2Pid, 0), 'El proceso PTY de Generación 2 no debe haber sido tocado por la limpieza de Gen 1');
+  assert.equal(session.running, true, 'session.running debe permanecer true para la Generación 2');
+  assert.equal(session.pid, pty2Pid, 'session.pid debe pertenecer a la Generación 2');
+  assert.equal(session.pty, ptyGen2, 'session.pty debe corresponder al PTY de Generación 2');
+
+  // Limpieza final de la Generación 2
+  await stopSession({ immediate: true });
+  assert.throws(() => process.kill(pty2Pid, 0), /ESRCH/, 'El proceso PTY de Gen 2 debe terminar tras su propio stop');
+});
+
+test('[CONCURRENCIA] Peticiones concurrentes a /api/auth no eluden la tasa de bloqueo y aplican limitación atómica', async () => {
+  const { app } = require('../server.js');
+  const http = require('node:http');
+
+  // Puerto efímero para pruebas de API HTTP
+  const testServer = http.createServer(app);
+  await new Promise((resolve) => testServer.listen(0, '127.0.0.1', resolve));
+  const port = testServer.address().port;
+
+  try {
+    const makeAuthRequest = (pwd) =>
+      new Promise((resolve) => {
+        const req = http.request(
+          {
+            hostname: '127.0.0.1',
+            port,
+            path: '/api/auth',
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Host: '127.0.0.1:3845',
+              Origin: 'http://127.0.0.1:3845',
+              'x-csrf-token': SESSION_TOKEN,
+            },
+          },
+          (res) => {
+            let data = '';
+            res.on('data', (c) => (data += c));
+            res.on('end', () => resolve({ status: res.statusCode, body: data }));
+          }
+        );
+        req.on('error', (err) => resolve({ status: 500, error: err }));
+        req.write(JSON.stringify({ password: pwd }));
+        req.end();
+      });
+
+    const responses = await Promise.all([
+      makeAuthRequest('incorrecta_1'),
+      makeAuthRequest('incorrecta_2'),
+      makeAuthRequest('incorrecta_3'),
+      makeAuthRequest('incorrecta_4'),
+      makeAuthRequest('incorrecta_5'),
+      makeAuthRequest('incorrecta_6'),
+    ]);
+
+    // Al menos algunas peticiones concurrentes deben haber recibido HTTP 429 (AUTH_CONCURRENT o AUTH_LOCKED)
+    const throttled = responses.filter((r) => r.status === 429);
+    assert.ok(
+      throttled.length > 0,
+      `Debe existir rechazo por 429 ante solicitudes concurrentes (obtenidas: ${throttled.length} respuestas 429)`
+    );
+  } finally {
+    await new Promise((resolve) => testServer.close(resolve));
   }
 });

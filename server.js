@@ -467,6 +467,8 @@ function send(ws, message) {
 
 const session = {
   pty: null,
+  pid: null,
+  pgid: null,
   running: false,
   startedAt: null,
   buffer: '',
@@ -557,6 +559,8 @@ async function startSession({ cols = 120, rows = 40 } = {}) {
   });
 
   session.pty = child;
+  session.pid = child.pid;
+  session.pgid = getProcessPgid(child.pid) || String(child.pid);
   session.running = true;
   session.startedAt = Date.now();
 
@@ -578,6 +582,8 @@ async function startSession({ cols = 120, rows = 40 } = {}) {
     session.running = false;
     session.exitCode = exitCode;
     session.pty = null;
+    session.pid = null;
+    session.pgid = null;
     logSystem('info', `Sesión de airgeddon finalizada (código ${exitCode})`);
     broadcast({ type: 'exit', code: exitCode });
     broadcast({ type: 'session', session: sessionSnapshot() });
@@ -594,7 +600,7 @@ async function startSession({ cols = 120, rows = 40 } = {}) {
  * Termina de forma atómica y recursiva un proceso, su grupo de procesos (PGID)
  * y toda su descendencia de subprocesos, verificando que NO pertenezca al servidor Node.js.
  */
-async function killProcessTree(rootPid, signal = '-9') {
+async function killProcessTree(rootPid, signal = '-9', knownPgid = '') {
   if (!rootPid) return;
   const targetPid = String(rootPid).trim();
   const serverPid = SERVER_PID;
@@ -610,7 +616,7 @@ async function killProcessTree(rootPid, signal = '-9') {
   // Regla defensiva: solo se señaliza por grupo (-pgid) si el PGID del servidor es fehacientemente conocido
   // y se comprueba que el PGID objetivo es válido y diferente del servidor.
   try {
-    let targetPgid = getProcessPgid(targetPid);
+    let targetPgid = knownPgid || getProcessPgid(targetPid);
     if (!targetPgid) {
       const pgRes = await sudoExec(['ps', '-o', 'pgid=', '-p', targetPid]);
       targetPgid = pgRes.ok && pgRes.stdout ? pgRes.stdout.trim().split(/\s+/)[0] : '';
@@ -664,12 +670,39 @@ async function killProcessTree(rootPid, signal = '-9') {
   }
 }
 
-function stopSession() {
-  if (!session.pty) return;
+async function stopSession({ immediate = false } = {}) {
+  if (!session.pty && !session.pid) return;
   logSystem('info', 'Deteniendo sesión de airgeddon (Ctrl+C y confirmación de salida)...');
   const child = session.pty;
-  const childPid = child.pid;
-  try { child.write('\x03'); } catch {}
+  const childPid = child ? child.pid : session.pid;
+  const targetPgid = session.pgid || (childPid ? getProcessPgid(childPid) : '');
+
+  const cleanupProcessTree = async () => {
+    // 1. PRIMERO: Terminar de forma atómica y recursiva el grupo de procesos y todos sus descendientes
+    // mientras los procesos e identificadores PGID/PID siguen vivos en el kernel
+    if (childPid) {
+      await killProcessTree(childPid, '-9', targetPgid);
+    }
+    // 2. SEGUNDO: Destruir la instancia PTY y liberar recursos
+    if (session.pty) {
+      try { child.kill('SIGKILL'); } catch {}
+      session.pty = null;
+    }
+    session.running = false;
+    session.pid = null;
+    session.pgid = null;
+    broadcast({ type: 'exit', code: 0 });
+    broadcast({ type: 'session', session: sessionSnapshot() });
+  };
+
+  if (immediate) {
+    await cleanupProcessTree();
+    return;
+  }
+
+  if (child) {
+    try { child.write('\x03'); } catch {}
+  }
   // Responder automáticamente al prompt de salida: "Detectada interrupción. ¿Quieres realmente salir del script? [Y/n]"
   setTimeout(() => {
     try { if (session.pty) session.pty.write('y\n'); } catch {}
@@ -677,21 +710,15 @@ function stopSession() {
   setTimeout(() => {
     try { if (session.pty) session.pty.write('y\n'); } catch {}
   }, 350);
-  setTimeout(async () => {
-    try {
-      if (session.pty) {
-        try { child.kill('SIGKILL'); } catch {}
-        session.pty = null;
-      }
-      session.running = false;
-      broadcast({ type: 'exit', code: 0 });
-      broadcast({ type: 'session', session: sessionSnapshot() });
-      if (childPid) {
-        // Detener recursivamente todo el árbol de subprocesos pertenecientes a esta sesión
-        await killProcessTree(childPid, '-9');
-      }
-    } catch {}
-  }, 1200);
+
+  return new Promise((resolve) => {
+    setTimeout(async () => {
+      try {
+        await cleanupProcessTree();
+      } catch {}
+      resolve();
+    }, 1200);
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

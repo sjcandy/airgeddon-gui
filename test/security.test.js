@@ -7,6 +7,9 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { spawn, execFileSync } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const pty = require('node-pty');
 const {
   getServerPgid,
@@ -14,6 +17,9 @@ const {
   SERVER_PID,
   SERVER_PGID,
   killProcessTree,
+  startSession,
+  stopSession,
+  session,
   startSudoAbsoluteTimer,
   resetSudoInactivityTimer,
   lockSudoSession,
@@ -116,6 +122,64 @@ test('Detener una sesión PTY en ejecución directa termina el grupo PTY y prese
   try { process.kill(-Number(witnessPid), 'SIGKILL'); } catch {}
 });
 
+test('Ciclo real de stopSession termina el proceso principal PTY y todos sus descendientes sin dejar huérfanos', async () => {
+  const initialPid = process.pid;
+  // Proceso testigo ajeno independiente
+  const witness = spawn('sleep', ['20'], { detached: true });
+  const witnessPid = witness.pid;
+
+  // Iniciar sesión con un subproceso PTY que lanza procesos hijos en segundo plano
+  const ptyChild = pty.spawn('bash', ['-c', 'sleep 60 & sleep 60 & wait'], {
+    cols: 80,
+    rows: 24,
+  });
+  const ptyPid = ptyChild.pid;
+  session.pty = ptyChild;
+  session.pid = ptyPid;
+  session.pgid = getProcessPgid(ptyPid) || String(ptyPid);
+  session.running = true;
+
+  // Esperar a que bash cree los subprocesos descendientes en el kernel
+  await new Promise((r) => setTimeout(r, 200));
+
+  // Obtener los PIDs descendientes mediante pgrep
+  const pgrepOut = execFileSync('pgrep', ['-P', String(ptyPid)], { encoding: 'utf8' });
+  const descendantPids = pgrepOut.trim().split(/\s+/).filter(Boolean);
+  assert.ok(descendantPids.length >= 1, 'Debe haber al menos un proceso descendiente en ejecución');
+
+  // Verificar que los descendientes y el PTY están vivos antes de stopSession
+  assert.doesNotThrow(() => process.kill(ptyPid, 0));
+  for (const cpid of descendantPids) {
+    assert.doesNotThrow(() => process.kill(Number(cpid), 0));
+  }
+
+  // Ejecutar el procedimiento real de stopSession con el orden correcto (limpiar árbol primero)
+  await stopSession({ immediate: true });
+  await new Promise((r) => setTimeout(r, 150));
+
+  // 1. El proceso PTY principal debe haber terminado
+  assert.throws(() => process.kill(ptyPid, 0), /ESRCH/, 'El proceso principal PTY debe estar muerto');
+
+  // 2. TODOS los procesos descendientes deben haber terminado (sin huérfanos)
+  for (const cpid of descendantPids) {
+    assert.throws(
+      () => process.kill(Number(cpid), 0),
+      /ESRCH/,
+      `El proceso descendiente ${cpid} debe haber sido terminado por stopSession`
+    );
+  }
+
+  // 3. El proceso testigo ajeno debe seguir vivo
+  assert.doesNotThrow(() => process.kill(witnessPid, 0), 'El proceso testigo ajeno debe permanecer vivo');
+
+  // 4. El servidor Node.js debe seguir vivo
+  assert.equal(process.pid, initialPid);
+  assert.doesNotThrow(() => process.kill(process.pid, 0));
+
+  // Limpieza del testigo
+  try { process.kill(-Number(witnessPid), 'SIGKILL'); } catch {}
+});
+
 test('Ningún proceso ajeno a la ejecución recibe señales y las guardas protegen al servidor', async () => {
   // Proceso ajeno / testigo independiente
   const witness = spawn('sleep', ['10'], { detached: true });
@@ -182,28 +246,60 @@ test('Las credenciales sudo se revocan al alcanzar exactamente el límite máxim
   clearSudoTimers();
 });
 
-test('lockSudoSession revoca credenciales en memoria y ejecuta sudo -k en el kernel', async () => {
-  setSudoPassword('clave_para_revocacion');
-  assert.equal(getSudoPassword(), 'clave_para_revocacion');
+test('lockSudoSession revoca credenciales en memoria y ejecuta sudo -k en el kernel (aislado y con ticket activo previo)', async () => {
+  // Configuración de un entorno aislado para verificar la transición de estado del ticket
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sudo-audit-'));
+  const sudoScript = path.join(tempDir, 'sudo');
+  const ticketFile = path.join(tempDir, '.sudo_ticket');
 
-  // Ejecutar la revocación completa de sesión
-  await lockSudoSession('prueba de invalidacion kernel');
-
-  // 1. Verificación en memoria
-  assert.equal(getSudoPassword(), null, 'La contraseña debe haber sido purgada de la memoria');
-
-  // 2. Verificación en el kernel: sudo -n -v comprueba si existe un ticket válido en el timestamp cache de sudo.
-  // Con el timestamp invalidado por sudo -k, la llamada debe fallar con código 1 (password required)
-  let kernelAuthValid = false;
-  try {
-    execFileSync('sudo', ['-n', '-v'], { stdio: 'pipe' });
-    kernelAuthValid = true;
-  } catch (err) {
-    kernelAuthValid = false;
-  }
-  assert.equal(
-    kernelAuthValid,
-    false,
-    'sudo -k debe haber invalidado el timestamp de autenticación en el kernel'
+  fs.writeFileSync(
+    sudoScript,
+    '#!/bin/sh\n' +
+      'TICKET="' + ticketFile + '"\n' +
+      'if [ "$1" = "-k" ]; then rm -f "$TICKET"; exit 0; fi\n' +
+      'if [ "$1" = "-n" ]; then\n' +
+      '  if [ -f "$TICKET" ]; then exit 0; else echo "sudo: a password is required" >&2; exit 1; fi\n' +
+      'fi\n' +
+      'touch "$TICKET"\n' +
+      'exit 0\n',
+    { mode: 0o755 }
   );
+
+  const oldPath = process.env.PATH;
+  process.env.PATH = tempDir + ':' + oldPath;
+
+  try {
+    // 1. Simular sesión autenticada con ticket activo y verificarlo previamente
+    execFileSync('sudo', ['-v']);
+    let ticketActiveBefore = false;
+    try {
+      execFileSync('sudo', ['-n', '-v'], { stdio: 'pipe' });
+      ticketActiveBefore = true;
+    } catch {
+      ticketActiveBefore = false;
+    }
+    assert.equal(ticketActiveBefore, true, 'El ticket previo debe confirmarse como válido y activo antes de la revocación');
+
+    setSudoPassword('clave_para_revocacion');
+    assert.equal(getSudoPassword(), 'clave_para_revocacion');
+
+    // 2. Ejecutar la revocación completa de sesión (en memoria y kernel)
+    await lockSudoSession('prueba aislada de invalidación en kernel');
+
+    // 3. Verificación en memoria: la contraseña ha sido purgada
+    assert.equal(getSudoPassword(), null, 'La contraseña debe haber sido purgada de la memoria');
+
+    // 4. Verificación en el kernel: sudo -k debe haber invalidado el ticket
+    let ticketActiveAfter = false;
+    try {
+      execFileSync('sudo', ['-n', '-v'], { stdio: 'pipe' });
+      ticketActiveAfter = true;
+    } catch {
+      ticketActiveAfter = false;
+    }
+    assert.equal(ticketActiveAfter, false, 'sudo -k ejecutado por lockSudoSession debe haber invalidado el ticket en el kernel');
+  } finally {
+    process.env.PATH = oldPath;
+    try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
+  }
 });

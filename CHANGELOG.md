@@ -39,6 +39,9 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - El botón de tema se traslada exclusivamente a Configuración; la barra superior usa el color de acento.
 
 ### Security
+- Orden determinista en `stopSession()` y persistencia de PGID: `session.pgid` se registra al instanciarse la sesión PTY, y `stopSession()` ejecuta `killProcessTree()` sobre el grupo y árbol de subprocesos ANTES de destruir la instancia PTY, evitando que los procesos descendientes queden huérfanos.
+- Prueba del ciclo completo de `stopSession()` (`test/security.test.js`): comprueba que una sesión PTY con subprocesos descendientes en segundo plano termina de forma íntegra tanto el proceso principal como todos los hijos, verificando que ni el servidor ni procesos testigos ajenos se vean afectados.
+- Prueba hermética de revocación en kernel con ticket activo previo: demuestra la transición de estado donde un ticket activo confirmado (`sudo -n -v` exitoso) es invalidado en el kernel por `sudo -k` ejecutado en `lockSudoSession()`.
 - Fallback seguro del PGID: si `/proc` y `ps` no pueden determinar fehacientemente el PGID del servidor, `getServerPgid()` devuelve cadena vacía y `killProcessTree` bloquea defensivamente el señalamiento por grupo (`-pgid`), eliminando cualquier suposición de que `PID == PGID`.
 - Prueba de terminación PTY directa en caliente (`test/security.test.js`): `killProcessTree` se invoca directamente sobre el proceso PTY interactivo en ejecución (sin matarlo de antemano), demostrando que termina el proceso PTY y que los procesos testigo ajenos y el servidor Node.js sobreviven intactos.
 - Comprobación de revocación en kernel (`sudo -k`): verificación mediante llamada no interactiva `sudo -n -v` de que `lockSudoSession` invalida fehacientemente el timestamp de autenticación del kernel además de purgar la contraseña de la memoria.

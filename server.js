@@ -28,6 +28,51 @@ const { spawn, execFile, execFileSync } = require('child_process');
 const { WebSocketServer, WebSocket } = require('ws');
 const pty = require('node-pty');
 
+/**
+ * Obtiene de forma determinista y conforme a POSIX el PGID del proceso actual.
+ * En Linux consulta /proc/self/stat; como alternativa POSIX utiliza `ps -o pgid= -p <pid>`.
+ */
+function getServerPgid() {
+  try {
+    const stat = fs.readFileSync('/proc/self/stat', 'utf8');
+    const match = stat.match(/\)\s+[A-Za-z]\s+\d+\s+(\d+)/);
+    if (match && match[1]) {
+      const parsed = match[1].trim();
+      if (parsed) return parsed;
+    }
+  } catch {}
+  try {
+    const out = execFileSync('ps', ['-o', 'pgid=', '-p', String(process.pid)], { encoding: 'utf8' });
+    const parsed = out.trim().split(/\s+/)[0];
+    if (parsed) return parsed;
+  } catch {}
+  return String(process.pid);
+}
+
+/**
+ * Obtiene el PGID de un PID arbitrario en el sistema.
+ */
+function getProcessPgid(pid) {
+  if (!pid) return '';
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const match = stat.match(/\)\s+[A-Za-z]\s+\d+\s+(\d+)/);
+    if (match && match[1]) {
+      const parsed = match[1].trim();
+      if (parsed) return parsed;
+    }
+  } catch {}
+  try {
+    const out = execFileSync('ps', ['-o', 'pgid=', '-p', String(pid)], { encoding: 'utf8' });
+    const parsed = out.trim().split(/\s+/)[0];
+    if (parsed) return parsed;
+  } catch {}
+  return '';
+}
+
+const SERVER_PID = String(process.pid);
+const SERVER_PGID = getServerPgid();
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Configuración
 // ─────────────────────────────────────────────────────────────────────────────
@@ -548,37 +593,67 @@ async function startSession({ cols = 120, rows = 40 } = {}) {
  */
 async function killProcessTree(rootPid, signal = '-9') {
   if (!rootPid) return;
-  const serverPgid = typeof process.getpgrp === 'function' ? String(process.getpgrp()) : '';
-  const serverPid = String(process.pid);
+  const targetPid = String(rootPid).trim();
+  const serverPid = SERVER_PID;
+  const serverPgid = SERVER_PGID || getServerPgid();
+
+  // Guarda estricta: bajo ninguna circunstancia se debe enviar una señal al servidor Node.js ni a PID 0/1
+  if (targetPid === serverPid || targetPid === serverPgid || targetPid === '0' || targetPid === '1') {
+    logSystem('warn', `Intento denegado de señalizar proceso protegido (PID/PGID servidor: ${targetPid})`);
+    return;
+  }
 
   // 1. Obtener y señalizar atómicamente el grupo de procesos (PGID) en el kernel,
-  // verificando estrictamente que NO coincida con el PGID ni PID del servidor Node.js
+  // verificando estrictamente que pertenezca al subproceso y NO coincida con el PGID ni PID del servidor Node.js
   try {
-    const pgRes = await sudoExec(['ps', '-o', 'pgid=', '-p', String(rootPid)]);
-    const pgid = pgRes.ok && pgRes.stdout ? pgRes.stdout.trim().split(/\s+/)[0] : '';
-    if (pgid && pgid !== '0' && pgid !== '1' && pgid !== serverPgid && pgid !== serverPid) {
-      await sudoExec(['kill', signal, `-${pgid}`]);
+    let targetPgid = getProcessPgid(targetPid);
+    if (!targetPgid) {
+      const pgRes = await sudoExec(['ps', '-o', 'pgid=', '-p', targetPid]);
+      targetPgid = pgRes.ok && pgRes.stdout ? pgRes.stdout.trim().split(/\s+/)[0] : '';
+    }
+    if (
+      targetPgid &&
+      targetPgid !== '0' &&
+      targetPgid !== '1' &&
+      targetPgid !== serverPgid &&
+      targetPgid !== serverPid &&
+      targetPgid !== String(process.ppid)
+    ) {
+      const numSig = signal.startsWith('-') ? signal.slice(1) : signal;
+      const res = await sudoExec(['kill', signal.startsWith('-') ? signal : `-${signal}`, `-${targetPgid}`]);
+      if (!res.ok) {
+        try { process.kill(-Number(targetPgid), Number(numSig) || signal); } catch {}
+      }
     }
   } catch {}
 
   // 2. Recorrer recursivamente todos los procesos descendientes
   try {
-    const res = await sudoExec(['pgrep', '-P', String(rootPid)]);
-    if (res.ok && res.stdout) {
-      const childPids = res.stdout.trim().split(/\s+/).filter(Boolean);
-      for (const cpid of childPids) {
-        if (cpid !== serverPid && cpid !== serverPgid) {
-          await killProcessTree(cpid, signal);
-        }
+    let childPids = [];
+    try {
+      const out = execFileSync('pgrep', ['-P', targetPid], { encoding: 'utf8' });
+      childPids = out.trim().split(/\s+/).filter(Boolean);
+    } catch {}
+    if (!childPids.length) {
+      const res = await sudoExec(['pgrep', '-P', targetPid]);
+      if (res.ok && res.stdout) {
+        childPids = res.stdout.trim().split(/\s+/).filter(Boolean);
+      }
+    }
+    for (const cpid of childPids) {
+      if (cpid !== serverPid && cpid !== serverPgid) {
+        await killProcessTree(cpid, signal);
       }
     }
   } catch {}
 
   // 3. Asegurar la terminación del proceso raíz (si no es el servidor)
-  if (String(rootPid) !== serverPid && String(rootPid) !== serverPgid) {
-    try {
-      await sudoExec(['kill', signal, String(rootPid)]);
-    } catch {}
+  if (targetPid !== serverPid && targetPid !== serverPgid) {
+    const numSig = signal.startsWith('-') ? signal.slice(1) : signal;
+    const res = await sudoExec(['kill', signal.startsWith('-') ? signal : `-${signal}`, targetPid]);
+    if (!res.ok) {
+      try { process.kill(Number(targetPid), Number(numSig) || signal); } catch {}
+    }
   }
 }
 
@@ -1182,26 +1257,58 @@ app.get('/api/sudo/status', async (req, res) => {
 
 const authAttemptsByIp = new Map();
 let sudoInactivityTimer = null;
+let sudoAbsoluteTimer = null;
 const SUDO_INACTIVITY_MS = 15 * 60 * 1000; // 15 minutos de inactividad
-const SUDO_MAX_LIFETIME_MS = 120 * 60 * 1000; // 2 horas límite máximo absoluto
+const SUDO_MAX_LIFETIME_MS = 120 * 60 * 1000; // 2 horas límite máximo absoluto independiente
 let sudoAuthenticatedAt = 0;
+
+function clearSudoTimers() {
+  if (sudoInactivityTimer) {
+    clearTimeout(sudoInactivityTimer);
+    sudoInactivityTimer = null;
+  }
+  if (sudoAbsoluteTimer) {
+    clearTimeout(sudoAbsoluteTimer);
+    sudoAbsoluteTimer = null;
+  }
+}
+
+function lockSudoSession(reason = 'inactividad') {
+  sudoPassword = null;
+  sudoAuthenticatedAt = 0;
+  clearSudoTimers();
+  execFileP('sudo', ['-k']).catch(() => {});
+  logSystem('info', `Sesión de sudo revocada automáticamente por ${reason}`);
+}
+
+function startSudoAbsoluteTimer(maxMs = SUDO_MAX_LIFETIME_MS) {
+  if (sudoAbsoluteTimer) clearTimeout(sudoAbsoluteTimer);
+  sudoAbsoluteTimer = setTimeout(() => {
+    if (sudoPassword) {
+      lockSudoSession(`límite máximo absoluto de tiempo (${Math.round(maxMs / 60000)} min)`);
+    }
+  }, maxMs);
+  if (typeof sudoAbsoluteTimer.unref === 'function') {
+    sudoAbsoluteTimer.unref();
+  }
+}
 
 function resetSudoInactivityTimer() {
   if (sudoInactivityTimer) clearTimeout(sudoInactivityTimer);
   sudoInactivityTimer = setTimeout(() => {
-    // Si la sesión excede el límite máximo absoluto (2 horas), forzar bloqueo
-    const elapsed = Date.now() - sudoAuthenticatedAt;
-    if (elapsed < SUDO_MAX_LIFETIME_MS && (session.running || scan.running)) {
+    // Si hay una sesión activa de airgeddon o un escaneo en curso, posponer el temporizador de inactividad.
+    // NOTA: El temporizador absoluto (sudoAbsoluteTimer) corre de forma independiente y NO puede ser pospuesto.
+    if (session.running || scan.running) {
       resetSudoInactivityTimer();
       return;
     }
     if (sudoPassword) {
-      sudoPassword = null;
-      sudoAuthenticatedAt = 0;
-      execFileP('sudo', ['-k']).catch(() => {});
-      logSystem('info', 'Sesión de sudo bloqueada automáticamente por límite de tiempo o inactividad');
+      lockSudoSession('inactividad (15 min sin operaciones)');
     }
   }, SUDO_INACTIVITY_MS);
+  if (typeof sudoInactivityTimer.unref === 'function') {
+    sudoInactivityTimer.unref();
+  }
 }
 
 function getAuthRecord(ip) {
@@ -1240,6 +1347,7 @@ app.post('/api/auth', async (req, res) => {
     rec.attempts = 0;
     rec.lockedUntil = 0;
     resetSudoInactivityTimer();
+    startSudoAbsoluteTimer(SUDO_MAX_LIFETIME_MS);
     return res.json({ ok: true });
   }
 
@@ -1254,13 +1362,7 @@ app.post('/api/auth', async (req, res) => {
 });
 
 app.post('/api/lock', async (req, res) => {
-  sudoPassword = null;
-  sudoAuthenticatedAt = 0;
-  if (sudoInactivityTimer) {
-    clearTimeout(sudoInactivityTimer);
-    sudoInactivityTimer = null;
-  }
-  await execFileP('sudo', ['-k'], { timeout: 3000 });
+  lockSudoSession('solicitud del usuario');
   res.json({ ok: true });
 });
 
@@ -1552,40 +1654,51 @@ wss.on('connection', async (ws, req) => {
 // Arranque y apagado
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('SIGTERM received, shutting down gracefully...');
-  if (session && session.pty) { try { session.pty.kill(); } catch {} }
-  if (scan && scan.proc) { try { scan.proc.kill(); } catch {} }
-  server.close(() => process.exit(0));
-  setTimeout(() => process.exit(1), 5000);
-});
-
-process.on('SIGINT', () => {
-  console.log('SIGINT received, shutting down gracefully...');
-  if (session && session.pty) { try { session.pty.kill(); } catch {} }
-  if (scan && scan.proc) { try { scan.proc.kill(); } catch {} }
-  server.close(() => process.exit(0));
-  setTimeout(() => process.exit(1), 5000);
-});
-
-server.listen(PORT, HOST, () => {
-  console.log('');
-  console.log('  ✦ airgeddon GUI');
-  console.log(`    Interfaz: http://${HOST}:${PORT}`);
-  console.log(`    airgeddon: ${AIRGEDDON_SCRIPT}`);
-  console.log(`    Estado: ${fs.existsSync(AIRGEDDON_SCRIPT) ? 'script encontrado' : 'SCRIPT NO ENCONTRADO'}`);
-  console.log('');
-});
-
 async function shutdown() {
   await stopScan({ silent: true });
-  if (session.pty) {
+  if (session && session.pty) {
     try { session.pty.kill(); } catch {}
   }
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 1500);
 }
 
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+if (require.main === module) {
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+
+  server.listen(PORT, HOST, () => {
+    console.log('');
+    console.log('  ✦ airgeddon GUI');
+    console.log(`    Interfaz: http://${HOST}:${PORT}`);
+    console.log(`    airgeddon: ${AIRGEDDON_SCRIPT}`);
+    console.log(`    Estado: ${fs.existsSync(AIRGEDDON_SCRIPT) ? 'script encontrado' : 'SCRIPT NO ENCONTRADO'}`);
+    console.log('');
+  });
+}
+
+module.exports = {
+  app,
+  server,
+  getServerPgid,
+  getProcessPgid,
+  SERVER_PID,
+  SERVER_PGID,
+  killProcessTree,
+  startScan,
+  stopScan,
+  startSession,
+  stopSession,
+  scan,
+  session,
+  resetSudoInactivityTimer,
+  startSudoAbsoluteTimer,
+  lockSudoSession,
+  clearSudoTimers,
+  getSudoPassword: () => sudoPassword,
+  setSudoPassword: (pwd) => { sudoPassword = pwd; },
+  getSudoAuthenticatedAt: () => sudoAuthenticatedAt,
+  setSudoAuthenticatedAt: (ts) => { sudoAuthenticatedAt = ts; },
+  SUDO_MAX_LIFETIME_MS,
+  SUDO_INACTIVITY_MS,
+};

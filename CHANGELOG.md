@@ -39,6 +39,10 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - El botón de tema se traslada exclusivamente a Configuración; la barra superior usa el color de acento.
 
 ### Security
+- Resolución determinista POSIX del PGID del servidor mediante inspección de `/proc/self/stat` y consulta canónica `ps -o pgid= -p <pid>`, reemplazando la API no estándar `process.getpgrp()`.
+- Temporizador absoluto de `sudo` totalmente independiente (`sudoAbsoluteTimer`): corre desacoplado del temporizador de inactividad y revoca incondicionalmente las credenciales en memoria y en kernel tras alcanzar el límite máximo (2 horas), sin importar la actividad o peticiones en curso.
+- Verificación del aislamiento de la sesión PTY (`node-pty`): la terminal interactiva se instancia en una nueva sesión POSIX independiente (`setsid`), garantizando que su terminación (`killProcessTree`) nunca transmita señales al servidor ni a procesos externos.
+- Suite de pruebas automatizadas de seguridad (`test/security.test.js`): 5 tests de integración con `node:test` validando aislamiento de PGID en escáner y PTY, no afectación al servidor Node.js, contención de señales sin impacto a procesos ajenos y revocación exacta por límite de tiempo de sudo.
 - Aislamiento estricto de grupos de procesos (PGID): `startScan` inicia subprocesos con `detached: true` conformando un PGID independiente, y `killProcessTree` valida exhaustivamente que jamás se envíen señales de terminación (`SIGINT`/`SIGKILL`) al PID o PGID del servidor Node.js.
 - Límite máximo absoluto de retención de credenciales `sudo` en memoria (`SUDO_MAX_LIFETIME_MS = 2 horas`): purga de credenciales e invalidación de sesión en kernel vía `sudo -k` ante operaciones excesivamente prolongadas o abandonadas.
 - Eliminación de autenticación por parámetro query en URLs (`req.query?._token`), forzando exclusivamente la cabecera `X-CSRF-Token` o cuerpo HTTP en peticiones REST.

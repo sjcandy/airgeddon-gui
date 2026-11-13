@@ -367,8 +367,8 @@ respuesta de vuelta a la PTY.**
 - **Aplicación de escritorio monousuario:** Diseñada para uso interactivo en la sesión gráfica del usuario local (`127.0.0.1`). No es un daemon multi-tenant ni un servicio web expuesto a internet.
 - **Autenticación criptográfica estricta:** Todas las rutas REST sensibles y mutadoras requieren autenticación vía cabecera `X-CSRF-Token` con token aleatorio de 32 bytes (`crypto.randomBytes`) validado en tiempo constante (`timingSafeEqual`). No se admite paso de tokens en query strings de URLs (`?_token=`).
 - **WebSockets seguros:** Handshake exclusivo mediante subprotocolo `airgeddon-auth, <TOKEN>`, rechazando orígenes externos y conexiones sin token.
-- **Aislamiento de subprocesos y control de PGID:** Los escaneos con `airodump-ng` se lanzan desacoplados (`detached: true`) formando un grupo de procesos independiente. La rutina de terminación `killProcessTree()` valida estrictamente que jamás se transmitan señales de terminación (`SIGINT`/`SIGKILL`) al PID ni al PGID del propio servidor Node.js.
-- **Gestión temporal de credenciales con techo máximo:** La contraseña de `sudo` solo reside en memoria y está sujeta a un temporizador de inactividad de 15 minutos (reiniciado ante cada operación activa) y a un **límite máximo absoluto de 2 horas** (`SUDO_MAX_LIFETIME_MS`), tras el cual se purga de memoria y se invalida la sesión en el kernel con `sudo -k`.
+- **Aislamiento de subprocesos y control de PGID:** Los escaneos con `airodump-ng` se lanzan desacoplados (`detached: true`) y las sesiones interactivas de terminal PTY se instancian en una sesión POSIX propia (`setsid`). La resolución del PGID del servidor se efectúa de forma determinista mediante `/proc/self/stat` y `ps -o pgid=`. La rutina `killProcessTree()` valida estrictamente que jamás se transmitan señales de terminación (`SIGINT`/`SIGKILL`) al PID ni al PGID del servidor Node.js ni a procesos testigo ajenos.
+- **Gestión temporal de credenciales con temporizador absoluto independiente:** La contraseña de `sudo` solo reside en memoria y está sujeta a un temporizador de inactividad de 15 minutos (reiniciado ante cada operación activa) y a un **temporizador absoluto totalmente independiente de 2 horas** (`SUDO_MAX_LIFETIME_MS`) que no puede ser pospuesto por actividad, tras el cual se purga de memoria y se invalida la sesión en el kernel con `sudo -k`.
 
 ---
 
@@ -392,8 +392,8 @@ npm install --production
 
 ```bash
 npm install       # dependencias
-npm test          # tests unitarios (node:test)
-npm run lint      # comprobación sintáctica de server.js y public/js/*.js
+npm test          # tests unitarios y de seguridad con node:test (parser, PGID, PTY, timeouts)
+npm run lint      # comprobación sintáctica de server.js, public/js/*.js y test/*.js
 ```
 
 Para levantar la aplicación en modo escritorio durante el desarrollo:

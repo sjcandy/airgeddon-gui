@@ -116,11 +116,15 @@ test('[VULN-01] Respuestas sensibles configuran cabeceras Cache-Control: no-stor
   assert.match(cacheControl, /no-store/, 'Las respuestas sensibles deben incluir no-store en Cache-Control');
 });
 
-test('[VULN-01] Petición GET / de otro usuario local (UID distinto) es rechazada con 403 y no entrega token', async () => {
+test('[VULN-01] GET / sin credenciales ni prueba del kernel se rechaza sin entregar token', async (t) => {
+  const readFileSync = fs.readFileSync;
+  t.mock.method(fs, 'readFileSync', function(file, ...args) {
+    if (file === '/proc/net/tcp' || file === '/proc/net/tcp6') return '';
+    return readFileSync.call(this, file, ...args);
+  });
   const unauthRes = await fetch(`http://127.0.0.1:${testPort}/`, {
     headers: {
       Host: '127.0.0.1',
-      'X-Simulate-Peer-Uid': String(process.getuid() + 1),
     },
   });
 

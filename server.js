@@ -155,48 +155,73 @@ function initLocalAuthSecretFile() {
 }
 initLocalAuthSecretFile();
 
-/**
- * Obtiene el UID del proceso propietario de un socket TCP entrante en loopback
- * consultando directamente la tabla de conexiones del kernel Linux (/proc/net/tcp y tcp6).
- */
-function getSocketOwnerUid(remotePort) {
-  if (!remotePort || typeof remotePort !== 'number') return null;
-  const hexPort = remotePort.toString(16).toUpperCase().padStart(4, '0');
-  for (const procFile of ['/proc/net/tcp', '/proc/net/tcp6']) {
-    try {
-      const content = fs.readFileSync(procFile, 'utf8');
-      const lines = content.split('\n');
-      for (let i = 1; i < lines.length; i++) {
-        const line = lines[i].trim();
-        if (!line) continue;
-        const parts = line.split(/\s+/);
-        // parts[1] es local_address (IP:PUERTO en hex) del socket cliente en la máquina local
-        const localAddr = parts[1];
-        if (localAddr && localAddr.endsWith(':' + hexPort)) {
-          const uid = parseInt(parts[7], 10);
-          if (!Number.isNaN(uid)) return uid;
-        }
-      }
-    } catch {}
+/** Devuelve una identidad binaria para direcciones loopback; otras fallan cerradas. */
+function loopbackAddressKey(address) {
+  if (typeof address !== 'string') return null;
+  const ipv4 = address.replace(/^::ffff:/i, '');
+  if (require('net').isIPv4(ipv4) && ipv4.startsWith('127.')) {
+    return `v4:${ipv4.split('.').map((n) => Number(n).toString(16).padStart(2, '0')).join('')}`;
+  }
+  if (address === '::1' || address === '0:0:0:0:0:0:0:1') {
+    return 'v6:00000000000000000000000000000001';
   }
   return null;
 }
 
+/** /proc escribe cada palabra de 32 bits en el orden de bytes nativo del host. */
+function procAddressKey(hex) {
+  if (!/^(?:[0-9a-f]{8}|[0-9a-f]{32})$/i.test(hex || '')) return null;
+  const bytes = Buffer.from(hex, 'hex');
+  if (os.endianness() === 'LE') {
+    for (let i = 0; i < bytes.length; i += 4) bytes.subarray(i, i + 4).reverse();
+  }
+  if (bytes.length === 4) return `v4:${bytes.toString('hex')}`;
+  const prefix = bytes.subarray(0, 12).toString('hex');
+  if (prefix === '00000000000000000000ffff') {
+    return `v4:${bytes.subarray(12).toString('hex')}`;
+  }
+  return `v6:${bytes.toString('hex')}`;
+}
+
+/**
+ * Identifica el socket CLIENTE mediante la tupla inversa de la conexión aceptada.
+ * Exige ambos extremos, estado ESTABLISHED y una sola fila inequívoca del kernel.
+ */
+function getSocketOwnerUid(socket) {
+  if (!socket || typeof socket !== 'object') return null;
+  const { remotePort, localPort, remoteAddress, localAddress } = socket;
+  if (![remotePort, localPort].every((p) => Number.isInteger(p) && p > 0 && p <= 65535)) return null;
+  const clientAddress = loopbackAddressKey(remoteAddress);
+  const serverAddress = loopbackAddressKey(localAddress);
+  if (!clientAddress || !serverAddress) return null;
+  const matches = [];
+  for (const procFile of ['/proc/net/tcp', '/proc/net/tcp6']) {
+    try {
+      const content = fs.readFileSync(procFile, 'utf8');
+      for (const line of content.split('\n').slice(1)) {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length < 8 || parts[3] !== '01') continue;
+        const from = parts[1].match(/^([0-9a-f]+):([0-9a-f]{4})$/i);
+        const to = parts[2].match(/^([0-9a-f]+):([0-9a-f]{4})$/i);
+        if (!from || !to || parseInt(from[2], 16) !== remotePort || parseInt(to[2], 16) !== localPort) continue;
+        if (procAddressKey(from[1]) !== clientAddress || procAddressKey(to[1]) !== serverAddress) continue;
+        if (!/^\d+$/.test(parts[7])) return null;
+        const uid = Number(parts[7]);
+        if (!Number.isSafeInteger(uid)) return null;
+        matches.push(uid);
+      }
+    } catch { /* Kernel no disponible: ninguna autorización implícita. */ }
+  }
+  return matches.length === 1 ? matches[0] : null;
+}
+
 /**
  * Mecanismo de autenticación local previo a la entrega del token de sesión (VULN-01).
- * Garantiza que usuarios locales diferentes del propietario de la sesión no puedan
- * obtener las credenciales ni interactuar con la aplicación.
+ * Acepta una credencial local válida o una conexión del mismo UID verificada
+ * contra el kernel. Si no puede verificar ninguna de las dos vías, deniega acceso.
  */
 function isLocalAuthorized(req) {
   if (!req) return false;
-
-  // En entorno de pruebas, permitir simular un UID de proceso remoto para validar rechazo (VULN-01)
-  if (req.headers && req.headers['x-simulate-peer-uid']) {
-    const simUid = parseInt(req.headers['x-simulate-peer-uid'], 10);
-    if (!Number.isNaN(simUid) && simUid !== process.getuid()) {
-      return false;
-    }
-  }
 
   // 1. Verificación por secreto de autenticación local (archivo 0600) en cabecera o cookie
   const headerToken = typeof req.get === 'function' ? req.get('x-local-auth-token') : req.headers?.['x-local-auth-token'];
@@ -218,9 +243,8 @@ function isLocalAuthorized(req) {
 
   // 2. Verificación de permisos del sistema operativo a nivel de kernel (Peer UID)
   // Inspecciona el UID del socket TCP en loopback para verificar que coincide exactamente con process.getuid()
-  const remotePort = req.socket?.remotePort;
-  if (remotePort && typeof process.getuid === 'function') {
-    const peerUid = getSocketOwnerUid(remotePort);
+  if (req.socket && typeof process.getuid === 'function') {
+    const peerUid = getSocketOwnerUid(req.socket);
     if (peerUid !== null && peerUid === process.getuid()) {
       return true;
     }

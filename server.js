@@ -46,7 +46,10 @@ function getServerPgid() {
     const parsed = out.trim().split(/\s+/)[0];
     if (parsed) return parsed;
   } catch {}
-  return String(process.pid);
+  // En caso de que fallen tanto /proc como ps, no asumimos que PID == PGID.
+  // Devolvemos cadena vacía (inválido/indeterminado) para que killProcessTree
+  // bloquee defensivamente cualquier señal a nivel de grupo (-pgid).
+  return '';
 }
 
 /**
@@ -598,13 +601,14 @@ async function killProcessTree(rootPid, signal = '-9') {
   const serverPgid = SERVER_PGID || getServerPgid();
 
   // Guarda estricta: bajo ninguna circunstancia se debe enviar una señal al servidor Node.js ni a PID 0/1
-  if (targetPid === serverPid || targetPid === serverPgid || targetPid === '0' || targetPid === '1') {
+  if (targetPid === serverPid || (serverPgid && targetPid === serverPgid) || targetPid === '0' || targetPid === '1') {
     logSystem('warn', `Intento denegado de señalizar proceso protegido (PID/PGID servidor: ${targetPid})`);
     return;
   }
 
-  // 1. Obtener y señalizar atómicamente el grupo de procesos (PGID) en el kernel,
-  // verificando estrictamente que pertenezca al subproceso y NO coincida con el PGID ni PID del servidor Node.js
+  // 1. Obtener y señalizar atómicamente el grupo de procesos (PGID) en el kernel.
+  // Regla defensiva: solo se señaliza por grupo (-pgid) si el PGID del servidor es fehacientemente conocido
+  // y se comprueba que el PGID objetivo es válido y diferente del servidor.
   try {
     let targetPgid = getProcessPgid(targetPid);
     if (!targetPgid) {
@@ -612,6 +616,7 @@ async function killProcessTree(rootPid, signal = '-9') {
       targetPgid = pgRes.ok && pgRes.stdout ? pgRes.stdout.trim().split(/\s+/)[0] : '';
     }
     if (
+      serverPgid &&
       targetPgid &&
       targetPgid !== '0' &&
       targetPgid !== '1' &&
@@ -624,6 +629,8 @@ async function killProcessTree(rootPid, signal = '-9') {
       if (!res.ok) {
         try { process.kill(-Number(targetPgid), Number(numSig) || signal); } catch {}
       }
+    } else if (!serverPgid && targetPgid) {
+      logSystem('warn', `Señalamiento por grupo omitido defensivamente: PGID del servidor no disponible`);
     }
   } catch {}
 
@@ -641,14 +648,14 @@ async function killProcessTree(rootPid, signal = '-9') {
       }
     }
     for (const cpid of childPids) {
-      if (cpid !== serverPid && cpid !== serverPgid) {
+      if (cpid !== serverPid && (!serverPgid || cpid !== serverPgid)) {
         await killProcessTree(cpid, signal);
       }
     }
   } catch {}
 
   // 3. Asegurar la terminación del proceso raíz (si no es el servidor)
-  if (targetPid !== serverPid && targetPid !== serverPgid) {
+  if (targetPid !== serverPid && (!serverPgid || targetPid !== serverPgid)) {
     const numSig = signal.startsWith('-') ? signal.slice(1) : signal;
     const res = await sudoExec(['kill', signal.startsWith('-') ? signal : `-${signal}`, targetPid]);
     if (!res.ok) {
@@ -1273,11 +1280,13 @@ function clearSudoTimers() {
   }
 }
 
-function lockSudoSession(reason = 'inactividad') {
+async function lockSudoSession(reason = 'inactividad') {
   sudoPassword = null;
   sudoAuthenticatedAt = 0;
   clearSudoTimers();
-  execFileP('sudo', ['-k']).catch(() => {});
+  try {
+    await execFileP('sudo', ['-k'], { timeout: 3000 });
+  } catch {}
   logSystem('info', `Sesión de sudo revocada automáticamente por ${reason}`);
 }
 

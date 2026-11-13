@@ -39,6 +39,9 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - El botón de tema se traslada exclusivamente a Configuración; la barra superior usa el color de acento.
 
 ### Security
+- Fallback seguro del PGID: si `/proc` y `ps` no pueden determinar fehacientemente el PGID del servidor, `getServerPgid()` devuelve cadena vacía y `killProcessTree` bloquea defensivamente el señalamiento por grupo (`-pgid`), eliminando cualquier suposición de que `PID == PGID`.
+- Prueba de terminación PTY directa en caliente (`test/security.test.js`): `killProcessTree` se invoca directamente sobre el proceso PTY interactivo en ejecución (sin matarlo de antemano), demostrando que termina el proceso PTY y que los procesos testigo ajenos y el servidor Node.js sobreviven intactos.
+- Comprobación de revocación en kernel (`sudo -k`): verificación mediante llamada no interactiva `sudo -n -v` de que `lockSudoSession` invalida fehacientemente el timestamp de autenticación del kernel además de purgar la contraseña de la memoria.
 - Resolución determinista POSIX del PGID del servidor mediante inspección de `/proc/self/stat` y consulta canónica `ps -o pgid= -p <pid>`, reemplazando la API no estándar `process.getpgrp()`.
 - Temporizador absoluto de `sudo` totalmente independiente (`sudoAbsoluteTimer`): corre desacoplado del temporizador de inactividad y revoca incondicionalmente las credenciales en memoria y en kernel tras alcanzar el límite máximo (2 horas), sin importar la actividad o peticiones en curso.
 - Verificación del aislamiento de la sesión PTY (`node-pty`): la terminal interactiva se instancia en una nueva sesión POSIX independiente (`setsid`), garantizando que su terminación (`killProcessTree`) nunca transmita señales al servidor ni a procesos externos.

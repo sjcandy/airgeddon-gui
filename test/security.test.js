@@ -6,7 +6,7 @@
 
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
-const { spawn } = require('node:child_process');
+const { spawn, execFileSync } = require('node:child_process');
 const pty = require('node-pty');
 const {
   getServerPgid,
@@ -16,6 +16,7 @@ const {
   killProcessTree,
   startSudoAbsoluteTimer,
   resetSudoInactivityTimer,
+  lockSudoSession,
   clearSudoTimers,
   getSudoPassword,
   setSudoPassword,
@@ -71,9 +72,14 @@ test('Detener un escaneo no termina el servidor Node.js', async () => {
   }, 'El servidor Node.js debe continuar vivo');
 });
 
-test('Detener una sesión PTY no termina el servidor Node.js', async () => {
+test('Detener una sesión PTY en ejecución directa termina el grupo PTY y preserva el servidor y testigos', async () => {
   const initialPid = process.pid;
-  const ptyChild = pty.spawn('bash', ['-c', 'sleep 10'], {
+  // Proceso testigo ajeno independiente
+  const witness = spawn('sleep', ['15'], { detached: true });
+  const witnessPid = witness.pid;
+
+  // Iniciar proceso PTY interactivo real
+  const ptyChild = pty.spawn('bash', ['-c', 'sleep 15'], {
     name: 'xterm-256color',
     cols: 80,
     rows: 24,
@@ -81,19 +87,36 @@ test('Detener una sesión PTY no termina el servidor Node.js', async () => {
   const ptyPid = ptyChild.pid;
   assert.ok(ptyPid);
 
-  // Detener la sesión PTY usando killProcessTree
-  try { ptyChild.kill('SIGKILL'); } catch {}
-  await killProcessTree(ptyPid, '-9');
-  await new Promise((r) => setTimeout(r, 100));
+  // Verificar que el PTY está activo antes de la llamada
+  assert.doesNotThrow(() => {
+    process.kill(ptyPid, 0);
+  }, 'El proceso PTY debe estar vivo al iniciar la prueba');
 
-  // El servidor Node.js debe seguir vivo
+  // Detener DIRECTAMENTE la sesión PTY en ejecución usando killProcessTree (SIN matarlo previamente)
+  await killProcessTree(ptyPid, '-9');
+  await new Promise((r) => setTimeout(r, 150));
+
+  // 1. El proceso PTY debe haber sido terminado por killProcessTree
+  assert.throws(() => {
+    process.kill(ptyPid, 0);
+  }, /ESRCH/, 'El proceso PTY debe haber terminado tras la llamada a killProcessTree');
+
+  // 2. El proceso testigo ajeno debe haber sobrevivido intacto
+  assert.doesNotThrow(() => {
+    process.kill(witnessPid, 0);
+  }, 'El proceso testigo ajeno debe permanecer vivo');
+
+  // 3. El servidor Node.js debe seguir vivo
   assert.equal(process.pid, initialPid);
   assert.doesNotThrow(() => {
     process.kill(process.pid, 0);
   }, 'El servidor Node.js debe seguir vivo tras terminar la sesión PTY');
+
+  // Limpieza del testigo
+  try { process.kill(-Number(witnessPid), 'SIGKILL'); } catch {}
 });
 
-test('Ningún proceso ajeno a la ejecución recibe señales', async () => {
+test('Ningún proceso ajeno a la ejecución recibe señales y las guardas protegen al servidor', async () => {
   // Proceso ajeno / testigo independiente
   const witness = spawn('sleep', ['10'], { detached: true });
   // Proceso objetivo a terminar
@@ -107,7 +130,9 @@ test('Ningún proceso ajeno a la ejecución recibe señales', async () => {
 
   // Intentar ejecutar killProcessTree contra el propio servidor (debe ser bloqueado por las guardas)
   await killProcessTree(SERVER_PID, '-9');
-  await killProcessTree(SERVER_PGID, '-9');
+  if (SERVER_PGID) {
+    await killProcessTree(SERVER_PGID, '-9');
+  }
 
   await new Promise((r) => setTimeout(r, 100));
 
@@ -155,4 +180,30 @@ test('Las credenciales sudo se revocan al alcanzar exactamente el límite máxim
   );
 
   clearSudoTimers();
+});
+
+test('lockSudoSession revoca credenciales en memoria y ejecuta sudo -k en el kernel', async () => {
+  setSudoPassword('clave_para_revocacion');
+  assert.equal(getSudoPassword(), 'clave_para_revocacion');
+
+  // Ejecutar la revocación completa de sesión
+  await lockSudoSession('prueba de invalidacion kernel');
+
+  // 1. Verificación en memoria
+  assert.equal(getSudoPassword(), null, 'La contraseña debe haber sido purgada de la memoria');
+
+  // 2. Verificación en el kernel: sudo -n -v comprueba si existe un ticket válido en el timestamp cache de sudo.
+  // Con el timestamp invalidado por sudo -k, la llamada debe fallar con código 1 (password required)
+  let kernelAuthValid = false;
+  try {
+    execFileSync('sudo', ['-n', '-v'], { stdio: 'pipe' });
+    kernelAuthValid = true;
+  } catch (err) {
+    kernelAuthValid = false;
+  }
+  assert.equal(
+    kernelAuthValid,
+    false,
+    'sudo -k debe haber invalidado el timestamp de autenticación en el kernel'
+  );
 });

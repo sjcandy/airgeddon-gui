@@ -431,3 +431,75 @@ test('[INTEGRACIÓN REAL] shutdown() invoca stopScan y stopSession({ immediate: 
     try { process.kill(-Number(witnessPid), 'SIGKILL'); } catch {}
   }
 });
+
+test('[INTEGRACIÓN REAL] shutdown() espera la finalización completa cuando la limpieza supera 1.500 ms sin aborto prematuro del proceso', async () => {
+  const initialPid = process.pid;
+  let exitFnCalled = false;
+  let exitCode = null;
+  const mockExitFn = (code) => {
+    exitFnCalled = true;
+    exitCode = code;
+  };
+
+  // Simular subproceso de escaneo activo con árbol de descendientes
+  const scanChild = spawn('bash', ['-c', 'sleep 60 & sleep 60 & wait'], { detached: true });
+  const scanPid = scanChild.pid;
+  scan.proc = scanChild;
+  scan.pid = scanPid;
+  scan.pgid = getProcessPgid(scanPid) || String(scanPid);
+  scan.running = true;
+
+  // Esperar a que se registren los descendientes
+  await new Promise((r) => setTimeout(r, 150));
+  const pgrepScan = execFileSync('pgrep', ['-P', String(scanPid)], { encoding: 'utf8' });
+  const scanDescendants = pgrepScan.trim().split(/\s+/).filter(Boolean);
+  assert.ok(scanDescendants.length >= 1, 'Deben existir descendientes en el escaneo');
+
+  // Proceso testigo ajeno independiente
+  const witness = spawn('sleep', ['20'], { detached: true });
+  const witnessPid = witness.pid;
+
+  const originalClose = server.close.bind(server);
+  let closeCalled = false;
+  server.close = (cb) => {
+    closeCalled = true;
+    if (typeof cb === 'function') cb();
+    return server;
+  };
+
+  const startTime = Date.now();
+
+  try {
+    // Configurar apagado con exit: true pero inyectando exitFn para no matar el test runner,
+    // y una demora de limpieza de 1.700 ms (> 1.500 ms) para verificar que no existe ningún timeout
+    // prematuro que aborte la operación antes de concluir la limpieza.
+    await shutdown({
+      exit: true,
+      watchdogMs: 5000,
+      exitFn: mockExitFn,
+      _testCleanupDelayMs: 1700,
+    });
+
+    const elapsed = Date.now() - startTime;
+    assert.ok(elapsed >= 1700, `El apagado debió esperar la finalización completa de la limpieza (duró ${elapsed} ms)`);
+    assert.equal(closeCalled, true, 'server.close debió ejecutarse tras completarse la limpieza');
+    assert.equal(exitFnCalled, true, 'exitFn debió ser invocado tras cerrar el servidor');
+    assert.equal(exitCode, 0, 'El código de salida debió ser 0 (apagado limpio)');
+
+    // 1. El proceso de escaneo y todos sus descendientes deben haber terminado
+    assert.throws(() => process.kill(scanPid, 0), /ESRCH/, 'El proceso de escaneo debió terminar');
+    for (const cpid of scanDescendants) {
+      assert.throws(() => process.kill(Number(cpid), 0), /ESRCH/, `El descendiente ${cpid} debió terminar`);
+    }
+
+    // 2. El proceso testigo ajeno sobrevive
+    assert.doesNotThrow(() => process.kill(witnessPid, 0), 'El testigo ajeno debe sobrevivir');
+
+    // 3. El runner de tests continúa en ejecución
+    assert.equal(process.pid, initialPid, 'El PID del servidor de pruebas debe mantenerse');
+  } finally {
+    server.close = originalClose;
+    try { process.kill(-Number(witnessPid), 'SIGKILL'); } catch {}
+    try { process.kill(-Number(scanPid), 'SIGKILL'); } catch {}
+  }
+});

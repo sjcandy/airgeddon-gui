@@ -1732,18 +1732,81 @@ wss.on('connection', async (ws, req) => {
 // Arranque y apagado
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function shutdown({ exit = true } = {}) {
+/**
+ * Procedimiento de apagado ordenado del servidor y de todos los subprocesos.
+ *
+ * @param {Object} options
+ * @param {boolean} [options.exit=true] - Si es true, finaliza el proceso de Node.js al concluir el apagado.
+ * @param {number} [options.watchdogMs=10000] - Tiempo de espera para el watchdog de emergencia en caso de que
+ *   conexiones colgadas impidan a server.close() finalizar (0 desactiva el watchdog).
+ *   NOTA: Este watchdog es estrictamente una SALIDA DE EMERGENCIA de último recurso y NO garantiza
+ *   una limpieza ordenada.
+ * @param {Function} [options.exitFn=process.exit] - Función invocada para terminar el proceso (configurable en tests).
+ * @param {number} [_testCleanupDelayMs=0] - Retardo simulado para pruebas de operaciones de limpieza prolongadas.
+ */
+async function shutdown({
+  exit = true,
+  watchdogMs = 10000,
+  exitFn = process.exit,
+  _testCleanupDelayMs = 0,
+} = {}) {
+  // 1. PRIMERO: Si existen operaciones de limpieza en curso o prolongadas, se esperan completamente
+  // sin que ningún temporizador de salida forzada pueda abortar o truncar la ejecución.
+  if (_testCleanupDelayMs > 0) {
+    await new Promise((resolve) => setTimeout(resolve, _testCleanupDelayMs));
+  }
+
+  // 2. Limpieza síncrona/esperada de todos los árboles de procesos (escáner y sesión PTY)
   await stopScan({ silent: true, immediate: true });
   await stopSession({ immediate: true });
+
+  // 3. SEGUNDO: Cerrar de forma activa todas las conexiones WebSocket abiertas
+  if (wss && wss.clients) {
+    for (const client of wss.clients) {
+      try { client.terminate(); } catch {}
+    }
+  }
+
+  // 4. TERCERO: Cerrar el servidor HTTP y sus sockets
   return new Promise((resolve) => {
-    server.close(() => {
-      if (exit) process.exit(0);
+    let watchdogTimer = null;
+    let finished = false;
+
+    const finalize = (code = 0) => {
+      if (finished) return;
+      finished = true;
+      if (watchdogTimer) {
+        clearTimeout(watchdogTimer);
+        watchdogTimer = null;
+      }
+      if (exit && typeof exitFn === 'function') {
+        exitFn(code);
+      }
       resolve();
+    };
+
+    if (typeof server.closeAllConnections === 'function') {
+      try { server.closeAllConnections(); } catch {}
+    }
+
+    server.close((err) => {
+      if (err) {
+        logSystem('warn', `Error al cerrar servidor HTTP en shutdown: ${err.message}`);
+      }
+      finalize(0);
     });
-    if (exit) {
-      setTimeout(() => process.exit(0), 1500);
-    } else {
-      setTimeout(resolve, 500);
+
+    // Salida de emergencia / Watchdog de último recurso:
+    // NOTA: Este temporizador NO garantiza una limpieza completa. Es estrictamente un mecanismo
+    // defensivo de emergencia para evitar que el proceso de Node.js quede colgado indefinidamente
+    // si existen sockets o conexiones de red atascadas que impidan a server.close() invocar su callback.
+    if (exit && watchdogMs > 0) {
+      watchdogTimer = setTimeout(() => {
+        logSystem('warn', `[EMERGENCIA] Watchdog de apagado activado tras ${watchdogMs} ms: cierre forzado`);
+        finalize(1);
+      }, watchdogMs);
+    } else if (!exit) {
+      setTimeout(() => finalize(0), 100);
     }
   });
 }

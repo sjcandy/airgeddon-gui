@@ -63,7 +63,7 @@ test('[VULN-01] GET / con cabecera X-Local-Auth-Token válida es autorizada con 
   );
 });
 
-test('[VULN-01] GET / con cookie ag_local_auth válida es autorizada con éxito', () => {
+test('[VULN-01] Una cookie con secreto local no sustituye la identidad del socket', () => {
   const cookieReq = {
     get: () => null,
     headers: { cookie: `ag_local_auth=${LOCAL_AUTH_SECRET}; other=123` },
@@ -72,8 +72,8 @@ test('[VULN-01] GET / con cookie ag_local_auth válida es autorizada con éxito'
 
   assert.equal(
     isLocalAuthorized(cookieReq),
-    true,
-    'Una petición con la cookie ag_local_auth válida debe ser autorizada'
+    false,
+    'Las cookies compartidas entre puertos no deben autorizar acceso local'
   );
 });
 
@@ -147,7 +147,11 @@ test('[VULN-01] Petición GET / con autorización local válida entrega 200 y to
   const html = await authRes.text();
   assert.ok(html.includes(`content="${SESSION_TOKEN}"`), 'HTML debe incluir el token de sesión');
   const setCookie = authRes.headers.get('set-cookie') || '';
-  assert.ok(setCookie.includes(`ag_session=${SESSION_TOKEN}`), 'Debe emitir cookie ag_session');
+  assert.equal(setCookie.includes(SESSION_TOKEN), false, 'La sesión no se publica en cookies');
+  assert.equal(setCookie.includes(LOCAL_AUTH_SECRET), false, 'El secreto local no se publica en cookies');
+  const cookies = authRes.headers.getSetCookie();
+  assert.equal(cookies.length, 2);
+  for (const cookie of cookies) assert.match(cookie, /Max-Age=0/);
   assert.match(authRes.headers.get('cache-control') || '', /no-store/);
 });
 
@@ -165,6 +169,26 @@ test('[VULN-01] Peticiones mutadoras sin token de sesión CSRF son rechazadas co
   assert.equal(res.status, 403);
   const body = await res.json();
   assert.equal(body.code, 'BAD_SESSION_TOKEN');
+});
+
+test('[SESIÓN] El navegador del mismo usuario abre la interfaz sin cookies', async () => {
+  const response = await fetch(`http://127.0.0.1:${testPort}/`);
+  assert.equal(response.status, 200);
+  assert.ok((await response.text()).includes(`content="${SESSION_TOKEN}"`));
+  assert.equal(response.headers.get('set-cookie').includes(SESSION_TOKEN), false);
+});
+
+test('[SESIÓN] Las cookies de versiones anteriores no autorizan sin prueba del kernel', async (t) => {
+  const readFileSync = fs.readFileSync;
+  t.mock.method(fs, 'readFileSync', function(file, ...args) {
+    if (file === '/proc/net/tcp' || file === '/proc/net/tcp6') return '';
+    return readFileSync.call(this, file, ...args);
+  });
+  const response = await fetch(`http://127.0.0.1:${testPort}/`, {
+    headers: { Cookie: `ag_local_auth=${LOCAL_AUTH_SECRET}; ag_session=${SESSION_TOKEN}` },
+  });
+  assert.equal(response.status, 403);
+  assert.equal((await response.text()).includes(SESSION_TOKEN), false);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

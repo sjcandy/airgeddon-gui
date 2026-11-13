@@ -223,22 +223,12 @@ function getSocketOwnerUid(socket) {
 function isLocalAuthorized(req) {
   if (!req) return false;
 
-  // 1. Verificación por secreto de autenticación local (archivo 0600) en cabecera o cookie
+  // 1. Secreto local (archivo 0600) únicamente por cabecera explícita, nunca cookies.
   const headerToken = typeof req.get === 'function' ? req.get('x-local-auth-token') : req.headers?.['x-local-auth-token'];
   if (headerToken && typeof headerToken === 'string') {
     const a = Buffer.from(headerToken);
     const b = Buffer.from(LOCAL_AUTH_SECRET);
     if (a.length === b.length && crypto.timingSafeEqual(a, b)) return true;
-  }
-
-  const cookieHeader = req.headers?.cookie || '';
-  if (cookieHeader) {
-    const match = cookieHeader.match(/(?:^|;\s*)ag_local_auth=([^;]+)/);
-    if (match && match[1]) {
-      const a = Buffer.from(match[1]);
-      const b = Buffer.from(LOCAL_AUTH_SECRET);
-      if (a.length === b.length && crypto.timingSafeEqual(a, b)) return true;
-    }
   }
 
   // 2. Verificación de permisos del sistema operativo a nivel de kernel (Peer UID)
@@ -460,8 +450,9 @@ app.get(['/', '/index.html'], (req, res, next) => {
       `<meta name="csrf-token" content="${SESSION_TOKEN}">`
     );
     res.setHeader('Set-Cookie', [
-      `ag_session=${SESSION_TOKEN}; Path=/; HttpOnly; SameSite=Strict`,
-      `ag_local_auth=${LOCAL_AUTH_SECRET}; Path=/; HttpOnly; SameSite=Strict`,
+      // Retirar cookies de versiones anteriores sin publicar ningún secreto nuevo.
+      'ag_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict',
+      'ag_local_auth=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict',
     ]);
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.send(withToken);

@@ -1658,6 +1658,7 @@ let sudoAbsoluteTimer = null;
 const SUDO_INACTIVITY_MS = 15 * 60 * 1000; // 15 minutos de inactividad
 const SUDO_MAX_LIFETIME_MS = 120 * 60 * 1000; // 2 horas límite máximo absoluto independiente
 let sudoAuthenticatedAt = 0;
+let sudoAuthGeneration = 0;
 
 function clearSudoTimers() {
   if (sudoInactivityTimer) {
@@ -1671,6 +1672,7 @@ function clearSudoTimers() {
 }
 
 async function lockSudoSession(reason = 'inactividad') {
+  sudoAuthGeneration++;
   sudoPassword = null;
   sudoAuthenticatedAt = 0;
   clearSudoTimers();
@@ -1755,6 +1757,7 @@ app.post('/api/auth', async (req, res) => {
   // Reservar el intento de forma atómica antes de cualquier espera o proceso
   rec.inFlight++;
   activeAuthInFlight++;
+  const authGeneration = sudoAuthGeneration;
 
   try {
     // Retardo defensivo de 500 ms contra ataques de fuerza bruta y análisis de tiempos
@@ -1766,6 +1769,12 @@ app.post('/api/auth', async (req, res) => {
       return res.status(400).json({ error: 'Contraseña no válida' });
     }
     const result = await sudoWithPassword(['-v'], password, { timeout: 10000 });
+    if (authGeneration !== sudoAuthGeneration) {
+      return res.status(409).json({
+        error: 'Autenticación cancelada por bloqueo de sesión',
+        code: 'AUTH_CANCELLED',
+      });
+    }
     if (result.ok) {
       sudoPassword = password;
       sudoAuthenticatedAt = Date.now();
@@ -1791,7 +1800,7 @@ app.post('/api/auth', async (req, res) => {
 });
 
 app.post('/api/lock', async (req, res) => {
-  lockSudoSession('solicitud del usuario');
+  await lockSudoSession('solicitud del usuario');
   res.json({ ok: true });
 });
 

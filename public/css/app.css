@@ -1405,7 +1405,7 @@ body {
 }
 .topbar { background: var(--glass-chrome); padding: 0 20px; gap: 12px; }
 .topbar-actions { gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
-.brand-icon { box-shadow: 0 2px 5px rgba(0, 0, 0, .14); border-color: rgba(246, 217, 87, .35); }
+.brand-icon { background: transparent; border-color: transparent; box-shadow: none; padding: 0; }
 .brand-text span { color: var(--tx-2); letter-spacing: .4px; font-size: 10px; }
 .sb-nav { padding: 12px 12px; }
 .nav-group-label { font-size: 10px; letter-spacing: 1.1px; padding: 14px 10px 8px; }

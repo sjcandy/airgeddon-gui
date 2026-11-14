@@ -34,19 +34,19 @@ Explora redes · Gestiona interfaces · Sigue cada operación en tiempo real
 
 ### 🧭 Panel principal
 
-![Panel principal de airgeddon GUI](docs/panel.png)
+![Panel principal de airgeddon GUI](docs/panel.webp)
+
+### 🔐 Autenticación
+
+![Ventana de autenticación de airgeddon GUI](docs/autenticacion.webp)
 
 ### 🤖 Asistente visual
 
-![Asistente visual de airgeddon GUI](docs/asistente.png)
+![Confirmación de modo monitor en airgeddon GUI](docs/asistente.webp)
 
 ### 📡 Explorador de redes
 
-![Explorador de redes de airgeddon GUI](docs/redes.png)
-
-### 🩺 Diagnóstico del sistema
-
-![Diagnóstico del sistema de airgeddon GUI](docs/diagnostico.png)
+![Explorador de redes de airgeddon GUI](docs/redes.webp)
 
 ## 🐧 Requisitos
 

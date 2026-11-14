@@ -116,6 +116,21 @@ if [ ! -d "node_modules" ]; then
     echo -e "${GREEN}[✓] Dependencias instaladas correctamente.${NC}\n"
 fi
 
+# Recuperar la ubicación elegida durante la instalación; nunca ejecutar el JSON.
+if [ -z "$AIRGEDDON_DIR" ]; then
+    AIRGEDDON_DIR=$(node -e '
+      const fs = require("fs");
+      const path = require("path");
+      try {
+        const settings = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+        const dir = settings.airgeddonDir;
+        if (typeof dir === "string" && path.isAbsolute(dir) && !/[\r\n\0]/.test(dir) &&
+            fs.statSync(path.join(dir, "airgeddon.sh")).isFile()) process.stdout.write(dir);
+      } catch {}
+    ' "${XDG_CONFIG_HOME:-$HOME/.config}/airgeddon-gui/settings.json")
+    if [ -n "$AIRGEDDON_DIR" ]; then export AIRGEDDON_DIR; fi
+fi
+
 # 4. Localizar airgeddon
 if [ -z "$AIRGEDDON_DIR" ]; then
     if [ -f "$SCRIPT_DIR/../airgeddon/airgeddon.sh" ]; then
@@ -181,9 +196,27 @@ fi
 URL="http://${HOST}:${PORT}"
 echo -e "\n${GREEN}${BOLD}[*] Comprobando servidor en ${URL}...${NC}"
 
+# La comprobación requiere una respuesta HTTP correcta y el JSON de salud esperado.
+if ! command -v curl &> /dev/null; then
+    echo -e "${RED}[✗] Instala curl para comprobar el arranque del servidor.${NC}"
+    exit 1
+fi
+server_is_ready() {
+    local health
+    health=$(curl -fsS --max-time 1 "http://${HOST}:${PORT}/api/health" 2>/dev/null) || return 1
+    printf '%s' "$health" | node -e '
+      let data = "";
+      process.stdin.on("data", chunk => { data += chunk; });
+      process.stdin.on("end", () => {
+        try { process.exit(JSON.parse(data).status === "ok" ? 0 : 1); }
+        catch { process.exit(1); }
+      });
+    '
+}
+
 ALREADY_RUNNING=0
 if command -v curl &> /dev/null; then
-    if curl -s "http://${HOST}:${PORT}/api/health" &> /dev/null; then
+    if server_is_ready; then
         ALREADY_RUNNING=1
         echo -e "${GREEN}[✓] El servidor ya se encontraba en ejecución.${NC}"
     fi
@@ -207,18 +240,22 @@ if [ "$ALREADY_RUNNING" -eq 0 ]; then
     PORT="$PORT" HOST="$HOST" node server.js &
     SERVER_PID=$!
 
-    # Esperar a que el servidor esté listo
+    # No abrir la interfaz si el proceso terminó o no responde a tiempo.
+    SERVER_READY=0
     for _ in $(seq 1 20); do
-        if command -v curl &> /dev/null; then
-            if curl -s "http://${HOST}:${PORT}/api/health" &> /dev/null; then
-                break
-            fi
-        else
-            sleep 0.5
+        if ! kill -0 "$SERVER_PID" 2>/dev/null; then break; fi
+        if server_is_ready; then
+            SERVER_READY=1
             break
         fi
         sleep 0.3
     done
+    if [ "$SERVER_READY" -ne 1 ] || ! kill -0 "$SERVER_PID" 2>/dev/null; then
+        echo -e "${RED}[✗] El servidor no pudo iniciarse. Revisa los errores anteriores.${NC}"
+        kill "$SERVER_PID" 2>/dev/null || true
+        wait "$SERVER_PID" 2>/dev/null || true
+        exit 1
+    fi
     echo -e "${GREEN}${BOLD}[✓] Servidor listo.${NC}"
 fi
 

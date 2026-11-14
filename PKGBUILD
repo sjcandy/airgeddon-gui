@@ -5,10 +5,10 @@ pkgname=airgeddon-gui-git
 pkgver=2.0.0.r1.g0000000
 pkgrel=1
 pkgdesc="Entorno gráfico nativo y suite de escritorio para airgeddon (auditoría inalámbrica)"
-arch=('any')
+arch=('x86_64' 'aarch64')
 url="https://github.com/sjcandy/airgeddon-gui"
 license=('MIT')
-depends=('nodejs>=22' 'npm' 'bash' 'sudo' 'iproute2')
+depends=('nodejs>=22' 'npm' 'bash' 'sudo' 'iproute2' 'curl')
 optdepends=(
   'brave-bin: Ventana de escritorio nativa sin marco de navegador'
   'chromium: Ventana de escritorio nativa'
@@ -66,13 +66,7 @@ build() {
   # hace falta en tiempo de ejecución.
   find node_modules -type d -name test -prune -exec rm -rf {} + 2>/dev/null || true
   find node_modules -type d -name '*.md' -delete 2>/dev/null || true
-  # Los Makefiles de node-pty guardan rutas absolutas del árbol de fuentes y
-  # pacman las rechaza por romper la reproducibilidad del paquete. Se borran
-  # conservando el binario compilado (build/Release/pty.node).
-  rm -f node_modules/node-pty/build/Makefile \
-        node_modules/node-pty/build/binding.Makefile \
-        node_modules/node-pty/build/pty.target.mk \
-        node_modules/node-pty/build/config.gypi 2>/dev/null || true
+
 }
 
 package() {
@@ -97,6 +91,7 @@ package() {
   install -Dm644 LICENSE "${pkgdir}/opt/airgeddon-gui/LICENSE"
   cp -a public "${pkgdir}/opt/airgeddon-gui/public"
   cp -a node_modules "${pkgdir}/opt/airgeddon-gui/node_modules"
+  node scripts/prepare-package.js "${pkgdir}/opt/airgeddon-gui"
 
   # Documentación
   install -Dm644 README.md "${pkgdir}/usr/share/doc/${pkgname}/README.md"

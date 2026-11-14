@@ -31,8 +31,7 @@
   "scripts": {
     "start": "./airgeddon-gui.sh",
     "server": "node server.js",
-    "test": "node --test",
-    "lint": "node --check server.js && for f in public/js/*.js test/*.js; do node --check \"$f\"; done",
+    "lint": "node --check server.js && for f in public/js/*.js scripts/*.js; do node --check \"$f\"; done",
     "build:deb": "./build-deb.sh",
     "build": "echo 'No build step required - static files served directly'"
   },

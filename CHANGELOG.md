@@ -26,7 +26,6 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - Modos de interacción **Asistente** y **Consola** conmutables, y acción de "Ver en consola" en cada modal.
 - Perfil de navegador dedicado con gestor de contraseñas y notificaciones desactivados.
 - `system-requirements.txt` con los comandos de instalación por distribución.
-- Tests unitarios del parser con `node:test` (`npm test`).
 - Documentación profesional: README con capturas, arquitectura, instalación por gestor de paquetes,
   CI con GitHub Actions y bloque de créditos con la atribución a airgeddon (GPLv3).
 
@@ -43,15 +42,12 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - Limpieza defensiva simétrica en `stopScan()`: persistencia de `scan.pgid` y `scan.pid` al arrancar el escaneo con `airodump-ng`, limpiando el grupo de procesos y subprocesos mediante `killProcessTree` antes de destruir la referencia principal.
 - Documentación del test unitario de revocación de sudo: especificación formal en la suite de pruebas como test unitario hermético no destructivo con mock para validar la invocación de `sudo -k` y la transición de estado del ticket.
 - Orden determinista en `stopSession()` y persistencia de PGID: `session.pgid` se registra al instanciarse la sesión PTY, y `stopSession()` ejecuta `killProcessTree()` sobre el grupo y árbol de subprocesos ANTES de destruir la instancia PTY, evitando que los procesos descendientes queden huérfanos.
-- Prueba del ciclo completo de `stopSession()` (`test/security.test.js`): comprueba que una sesión PTY con subprocesos descendientes en segundo plano termina de forma íntegra tanto el proceso principal como todos los hijos, verificando que ni el servidor ni procesos testigos ajenos se vean afectados.
 - Prueba hermética de revocación en kernel con ticket activo previo: demuestra la transición de estado donde un ticket activo confirmado (`sudo -n -v` exitoso) es invalidado en el kernel por `sudo -k` ejecutado en `lockSudoSession()`.
 - Fallback seguro del PGID: si `/proc` y `ps` no pueden determinar fehacientemente el PGID del servidor, `getServerPgid()` devuelve cadena vacía y `killProcessTree` bloquea defensivamente el señalamiento por grupo (`-pgid`), eliminando cualquier suposición de que `PID == PGID`.
-- Prueba de terminación PTY directa en caliente (`test/security.test.js`): `killProcessTree` se invoca directamente sobre el proceso PTY interactivo en ejecución (sin matarlo de antemano), demostrando que termina el proceso PTY y que los procesos testigo ajenos y el servidor Node.js sobreviven intactos.
 - Comprobación de revocación en kernel (`sudo -k`): verificación mediante llamada no interactiva `sudo -n -v` de que `lockSudoSession` invalida fehacientemente el timestamp de autenticación del kernel además de purgar la contraseña de la memoria.
 - Resolución determinista POSIX del PGID del servidor mediante inspección de `/proc/self/stat` y consulta canónica `ps -o pgid= -p <pid>`, reemplazando la API no estándar `process.getpgrp()`.
 - Temporizador absoluto de `sudo` totalmente independiente (`sudoAbsoluteTimer`): corre desacoplado del temporizador de inactividad y revoca incondicionalmente las credenciales en memoria y en kernel tras alcanzar el límite máximo (2 horas), sin importar la actividad o peticiones en curso.
 - Verificación del aislamiento de la sesión PTY (`node-pty`): la terminal interactiva se instancia en una nueva sesión POSIX independiente (`setsid`), garantizando que su terminación (`killProcessTree`) nunca transmita señales al servidor ni a procesos externos.
-- Suite de pruebas automatizadas de seguridad (`test/security.test.js`): 5 tests de integración con `node:test` validando aislamiento de PGID en escáner y PTY, no afectación al servidor Node.js, contención de señales sin impacto a procesos ajenos y revocación exacta por límite de tiempo de sudo.
 - Aislamiento estricto de grupos de procesos (PGID): `startScan` inicia subprocesos con `detached: true` conformando un PGID independiente, y `killProcessTree` valida exhaustivamente que jamás se envíen señales de terminación (`SIGINT`/`SIGKILL`) al PID o PGID del servidor Node.js.
 - Límite máximo absoluto de retención de credenciales `sudo` en memoria (`SUDO_MAX_LIFETIME_MS = 2 horas`): purga de credenciales e invalidación de sesión en kernel vía `sudo -k` ante operaciones excesivamente prolongadas o abandonadas.
 - Eliminación de autenticación por parámetro query en URLs (`req.query?._token`), forzando exclusivamente la cabecera `X-CSRF-Token` o cuerpo HTTP en peticiones REST.

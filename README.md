@@ -1,427 +1,170 @@
 <div align="center">
 
-# airgeddon GUI
+# 📡 airgeddon GUI
 
-**Interfaz gráfica de escritorio para [airgeddon](https://github.com/v1s1t0r1sh3r3/airgeddon) en Linux**
+**Tu centro de control visual para airgeddon en Linux.**
 
-[Panel](docs/panel.png)
+Explora redes · Gestiona interfaces · Sigue cada operación en tiempo real
 
-[![MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22-green.svg)](https://nodejs.org/)
-[![Linux](https://img.shields.io/badge/Platform-Linux-blue.svg)](https://www.linux.org/)
-[![airgeddon](https://img.shields.io/badge/airgeddon-compatible-orange.svg)](https://github.com/v1s1t0r1sh3r3/airgeddon)
-[![Version](https://img.shields.io/badge/version-2.0.0-teal.svg)](package.json)
+[![Linux](https://img.shields.io/badge/Linux-Escritorio-38bdf8?style=for-the-badge&logo=linux&logoColor=white)](#-requisitos)
+[![Node.js](https://img.shields.io/badge/Node.js-22%2B-22c55e?style=for-the-badge&logo=nodedotjs&logoColor=white)](#-descarga-e-instalación)
+[![Licencia MIT](https://img.shields.io/badge/Licencia-MIT-a78bfa?style=for-the-badge)](LICENSE)
 
-</div>
-
----
-
-## ¿Qué es esto?
-
-**airgeddon GUI** es un *front-end* gráfico y una **aplicación de escritorio nativa para Linux** que envuelve a
-[airgeddon](https://github.com/v1s1t0r1sh3r3/airgeddon), el script de auditoría inalámbrica de
-[v1s1t0r1sh3r3](https://github.com/v1s1t0r1sh3r3).
-
-airgeddon es un programa de consola brillante, pero exactamente lo contrario de un entorno hostil: hay que
-memorizar atajos, interpretar menús en ASCII y tomar decisiones a ciegas. **airgeddon GUI** se coloca por delante
-de esa terminal y la convierte en una experiencia visual: analiza la pantalla de airgeddon en tiempo real,
-reconoce qué te está pidiendo y te lo presenta en tarjetas, tablas y formularios.
-
-El resultado no es una simple ventana con un `iframe`: es una capa de **automatización de terminal** que lee el
-búfer PTY, lo interpreta y reconstruye la interacción como interfaz gráfica nativa.
-
-> ⚠️ **Uso responsable.** Esta herramienta está pensada exclusivamente para auditorías de seguridad en redes
-> propias o sobre las que exista autorización formal y por escrito. Su uso contra redes de terceros sin
-> consentimiento es **ilegal** en la mayoría de países. Eres tú el responsable del uso que hagas de ella.
-
----
-
-## 📸 Capturas
-
-<div align="center">
-
-### Panel de control
-
-<img src="docs/panel.png" alt="Panel principal de airgeddon GUI" width="100%">
-
-### Asistente visual — confirmación de modo monitor
-
-<img src="docs/asistente.png" alt="Modal de confirmación del asistente visual" width="100%">
-
-### Explorador y escáner de redes
-
-<img src="docs/redes.png" alt="Vista de redes cercanas con ordenación y filtros" width="100%">
-
-### Diagnóstico del sistema
-
-<img src="docs/diagnostico.png" alt="Vista de diagnóstico con herramientas instaladas" width="100%">
+[🚀 Instalar](#-descarga-e-instalación) · [🖼️ Capturas](#-capturas) · [🎮 Primeros pasos](#-primeros-pasos) · [🛠️ Ayuda](#-problemas-frecuentes)
 
 </div>
 
 ---
 
-## ✨ Características
+## ⚡ ¿Para qué sirve?
 
-### 🖥️ Aplicación de escritorio nativa
+**airgeddon GUI** es una interfaz gráfica para utilizar [airgeddon](https://github.com/v1s1t0r1sh3r3/airgeddon) en Linux. Permite gestionar interfaces WiFi, explorar redes y seguir las operaciones de airgeddon mediante un asistente visual y una consola integrada.
 
-- Se integra en el menú de aplicaciones del sistema (`~/.local/share/applications/airgeddon-gui.desktop`).
-- **Ventana independiente**: sin barra de direcciones, sin pestañas, sin barra de herramientas.
-- Icono propio multirresolución (16 → 256 px) en la barra de tareas, con `StartupWMClass` para que el botón
-  `Alt + Tab` y el dock lo asocien correctamente.
-- Gestiónor de contraseñas y avisos de notificaciones del navegador **desactivados** en el perfil dedicado.
-- Sin modo web: la aplicación se abre siempre en su propia ventana de escritorio.
+## 🧭 Funciones principales
 
-### 🤖 Asistente visual inteligente
+| | Función | Qué puedes hacer |
+|:--:|:--|:--|
+| 🤖 | **Asistente visual** | Responder a los menús y avisos de airgeddon. |
+| 📡 | **Explorador de redes** | Filtrar redes y consultar información de sus clientes. |
+| 🔌 | **Interfaces WiFi** | Gestionar adaptadores y modo monitor. |
+| 💻 | **Consola en vivo** | Seguir la salida de cada operación en tiempo real. |
+| 🩺 | **Diagnóstico** | Comprobar herramientas y dependencias del sistema. |
 
-Es el núcleo del proyecto. Un ciclo de **detectar → preguntar → responder**:
+## 🖼️ Capturas
 
-| Tipo de prompt | Qué hace la GUI |
-|---|---|
-| **Menú** | Convierte las opciones numeradas de airgeddon en tarjetas clicables con icono y descripción. Puedes teclear el número directamente. |
-| **Redes** | Tabla o tarjetas con búsqueda, filtro por banda (2.4 / 5 / 6 GHz), señal mínima, 5 criterios de ordenación, desglose de clientes y botón **Auditar** por fila. |
-| **Confirmación** | `[Y/n]` se convierte en una ventana con **Sí / No** y atajos de teclado (`y`, `s`, `n`, `Enter`). |
-| **Entrada de texto** | Campo con el valor por defecto detectado en la pregunta. |
-| **Contraseña de sudo** | Campo de contraseña con toggle de visibilidad, sin guardado automático. |
-| **Continuar** | *"Pulsa Enter para continuar"*, clasificado automáticamente como **Error**, **Advertencia**, **Completado** o neutro. |
+### 🧭 Panel principal
 
-Además, el asistente **detecta y explica errores** antes de que se produzcan: si seleccionas una tarjeta cableada
-(`enp2s0`) o una acción incompatible, te avisa con la causa y la solución en lugar de dejarte atascado.
+![Panel principal de airgeddon GUI](docs/panel.png)
 
-### 💻 Consola PTY en vivo
+### 🤖 Asistente visual
 
-- Terminal **xterm.js** embebida con la salida ANSI exacta de airgeddon.
-- Búsqueda integrada (`Ctrl + F`), copiar selección, ajuste de tamaño de fuente (`Ctrl + +` / `Ctrl + -`).
-- Auto-scroll inteligente: se detiene al subir manualmente y se reanuda al volver al final.
-- **3 pestañas**: `airgeddon`, `Sistema` y `Eventos`, con descarga del log de sesión.
+![Asistente visual de airgeddon GUI](docs/asistente.png)
 
-### 📡 Auditoría guiada
+### 📡 Explorador de redes
 
-- **8 auditorías** predefinidas (Handshake/PMKID, DoS, Evil Twin, WPS, WEP, Descifrado WPA/WPA2, Enterprise, WPA3),
-  cada una con sus pasos, sus tags y una guíamodal explicativa.
-- Notas de campo, barra de progreso y **plantillas** de auditoría guardables y reutilizables.
-- Las **14 acciones** del menú principal de airgeddon, siempre accesibles como botones.
+![Explorador de redes de airgeddon GUI](docs/redes.png)
 
-### 📊 Escaneo de redes
+### 🩺 Diagnóstico del sistema
 
-- Escaneo nativo con `airodump-ng` en modo CSV, con actualización **en vivo** cada segundo.
-- Asociación automática de **clientes/estaciones** a su punto de acceso.
-- Conversión dBm → porcentaje de señal, detección de banda por canal/frecuencia y etiquetado de seguridad
-  (WEP / WPA / WPA2 / WPA3 / Abierta).
-- Favoritos, exportación a **CSV** y ordenación por señal, canal, seguridad, banda o clientes.
+![Diagnóstico del sistema de airgeddon GUI](docs/diagnostico.png)
 
-### 🔧 Diagnóstico del sistema
+## 🐧 Requisitos
 
-- Detección de **31 herramientas** de auditoría (instaladas / faltantes) y de sus versiones.
-- Estado de airgeddon, de `.airgeddonrc`, del estado de `sudo` y del sistema.
-- Estado de la interfaz en modo monitor, del escaneo y de las sesiones.
+- Linux con entorno gráfico.
+- Git para descargar el proyecto.
+- Node.js **22 o superior** y npm.
+- Un navegador basado en Chromium, como Chromium, Chrome o Brave.
+- airgeddon y las herramientas que requiera cada operación.
+- Un adaptador WiFi compatible con **modo monitor** para las funciones que lo necesiten.
+- Permisos de administrador mediante `sudo` para las operaciones del sistema.
 
-### 🛡️ Seguridad y privacidad
+> 💡 El instalador comprueba varias de estas dependencias y ofrece instalar las que faltan.
 
-- El servidor hace **bind a `127.0.0.1`** únicamente: no es accesible desde la red.
-- La contraseña de `sudo` **nunca se escribe en disco**: vive solo en la memoria RAM del proceso y se invalida al
-  cerrar sesión (`POST /api/lock`).
-- Se aplica una **Content-Security-Policy** estricta (`script-src 'self'`, `object-src 'none'`,
-  `frame-ancestors 'none'`).
-- La contraseña se enmascara (`••••••`) en toda la salida de la terminal y en el registro del sistema.
-- **Protección CSRF**: las peticiones que modifican el estado (autenticación sudo, escritura de `.airgeddonrc`,
-  gestión de interfaces, actualizaciones) se rechazan si el encabezado `Origin` no corresponde al propio servidor.
-  Así, una página web ajena no puede controlar la aplicación aunque esté abierta en el navegador.
-- Las credenciales que pueda contener la URL del remoto de git se ocultan (`••••••`) antes de mostrarse en la
-  interfaz de actualizaciones.
+## 🚀 Descarga e instalación
 
-### 🔄 Actualizaciones integradas
-
-- Comprobación y aplicación de actualizaciones **desde la interfaz** (Configuración → Comprobar → Actualizar).
-- Empaquetado nativo: **`.deb`** para Debian / Ubuntu / Kali / Parrot y **PKGBUILD** para Arch / CachyOS / Manjaro.
-
----
-
-## 🐧 Distribuciones soportadas
-
-| Distribución | Gestor | Vía de instalación |
-| :--- | :---: | :--- |
-| **Debian**, **Ubuntu**, **Kali Linux**, **Parrot OS** | `apt` | `install.sh` o paquete `.deb` |
-| **Arch Linux**, **CachyOS**, **Manjaro** | `pacman` | `install.sh` o `PKGBUILD` (`makepkg -si`) |
-| **Fedora**, **RHEL**, **openSUSE** | `dnf` / `zypper` | `install.sh` |
-
-El instalador `install.sh` detecta el gestor de paquetes automáticamente, por lo que funciona en las tres familias
-sin cambios.
-
----
-
-## 🚀 Instalación
-
-### Opción A — Instalador interactivo (recomendada)
-
-El instalador comprueba tus dependencias, te pregunta si ya tienes airgeddon (y si no, lo clona desde su fuente
-oficial), instala las herramientas de auditoría que falten, instala las dependencias de Node y registra la
-aplicación en tu menú.
+Abre una terminal y ejecuta:
 
 ```bash
 git clone https://github.com/sjcandy/airgeddon-gui.git
 cd airgeddon-gui
-chmod +x install.sh
 ./install.sh
 ```
 
-<details>
-<summary><b>¿Qué hace exactamente?</b></summary>
+Sigue las indicaciones del instalador. Podrás utilizar una instalación existente de airgeddon o descargar el proyecto original durante la configuración.
 
-1. Detecta el gestor de paquetes (`pacman`, `apt` o `dnf`).
-2. Comprueba **Node.js ≥ 22** y **npm**; si faltan, te ofrece instalarlos (en Debian/Ubuntu añade el repositorio
-   oficial de NodeSource 24 LTS).
-3. Localiza una instalación previa de airgeddon o te permite indicar la ruta; si no hay ninguna, **clona
-   `https://github.com/v1s1t0r1sh3r3/airgeddon.git`** automáticamente.
-4. Comprueba las herramientas de auditoría (`aircrack-ng`, `xterm`, `iw`, `curl`) y el toolchain necesario para
-   compilar `node-pty`.
-5. Ejecuta `npm install`.
-6. Genera los iconos multirresolución y el archivo `.desktop` de la aplicación.
+Ejecuta el instalador como tu usuario habitual; solicitará permisos mediante `sudo` cuando sean necesarios.
 
-</details>
+## ▶️ Cómo abrir la aplicación
 
-### Opción B — Debian / Ubuntu / Kali / Parrot (paquete `.deb`)
-
-```bash
-git clone https://github.com/sjcandy/airgeddon-gui.git
-cd airgeddon-gui
-
-# Construir el paquete
-./build-deb.sh
-
-# Instalar
-sudo apt install ./airgeddon-gui_2.0.0_all.deb
-```
-
-El `.deb` instala la aplicación en `/opt/airgeddon-gui`, crea el lanzador `/usr/bin/airgeddon-gui` y el acceso
-directo `.desktop`, y compila las dependencias de Node en el `postinst`.
-
-<details>
-<summary><b>Dependencias del sistema en Debian / Ubuntu (si prefieres instalarlas antes)</b></summary>
-
-```bash
-sudo apt update
-sudo apt install -y \
-    nodejs npm git curl aircrack-ng xterm wireless-tools iw ccze iproute2 \
-    build-essential python3 python3-pil
-
-# airgeddon (proyecto original, GPLv3)
-git clone https://github.com/v1s1t0r1sh3r3/airgeddon.git ~/airgeddon
-```
-
-</details>
-
-### Opción C — Arch Linux / CachyOS / Manjaro (paquete `PKGBUILD`)
-
-```bash
-git clone https://github.com/sjcandy/airgeddon-gui.git
-cd airgeddon-gui
-
-# Construir e instalar el paquete
-makepkg -si
-```
-
-El `PKGBUILD` es un paquete **VCS**: sigue la rama `main` del repositorio y calcula la versión a partir de los
-tags y los commits. La instalación coloca la aplicación en `/opt/airgeddon-gui`, crea `/usr/bin/airgeddon-gui` y el
-acceso directo `.desktop`.
-
-<details>
-<summary><b>Dependencias del sistema en Arch / CachyOS (si prefieres instalarlas antes)</b></summary>
-
-```bash
-sudo pacman -S --needed \
-    nodejs npm git curl aircrack-ng xterm iw ccze iproute2 \
-    base-devel python python-pillow brave-bin
-
-# airgeddon (proyecto original, GPLv3)
-git clone https://github.com/v1s1t0r1sh3r3/airgeddon.git ~/airgeddon
-```
-
-</details>
-
-### Opción D — Instalación manual
-
-```bash
-git clone https://github.com/sjcandy/airgeddon-gui.git
-cd airgeddon-gui
-npm install
-```
-
-Para ejecutarla como aplicación de escritorio:
+Desde la carpeta del proyecto:
 
 ```bash
 ./airgeddon-gui.sh
 ```
 
-Si necesitas arrancar solo el servidor (por ejemplo para depurar), puedes lanzar `node server.js` directamente y
-apuntar la variable `AIRGEDDON_DIR` a tu instalación de airgeddon:
+También puedes buscar **airgeddon GUI** en el menú de aplicaciones después de completar la instalación.
+
+Si airgeddon está en una ubicación que la aplicación no detecta, indica su carpeta al arrancar:
 
 ```bash
-AIRGEDDON_DIR=/ruta/a/airgeddon node server.js
+AIRGEDDON_DIR="/ruta/a/airgeddon" ./airgeddon-gui.sh
 ```
 
----
+La ruta debe apuntar a la carpeta que contiene `airgeddon.sh`.
 
-## 🎮 Uso
+## 🎮 Primeros pasos
 
-### Desde el menú de aplicaciones
+1. 🩺 Abre **Diagnóstico** para comprobar las herramientas disponibles.
+2. 🔌 En **Interfaces**, selecciona tu adaptador WiFi y revisa su estado.
+3. 📡 Accede a **Redes** para explorar las redes disponibles.
+4. 🤖 Utiliza el **asistente visual** para seguir las operaciones de airgeddon.
+5. 💻 Consulta la **consola integrada** para ver la salida y los mensajes de error.
 
-Pulsa **Super / Windows**, escribe `airgeddon` y haz clic en el icono. Se abre como ventana nativa.
+Las funciones disponibles dependen del adaptador WiFi, sus controladores y las herramientas instaladas.
 
-### Desde la terminal
+## 🔄 Actualización
+
+En una instalación descargada con Git, puedes comprobar las actualizaciones desde **Configuración**.
+
+También puedes actualizar desde una terminal, dentro de la carpeta del proyecto y con la aplicación cerrada:
 
 ```bash
-# Modo aplicación de escritorio (por defecto)
-./airgeddon-gui.sh
-
-# Modo navegador web estándar
-./airgeddon-gui.sh --browser
-
-# Modo servidor exclusivo (sin abrir navegador ni ventana, ideal para headless o SSH)
-./airgeddon-gui.sh --server-only
-
-# Ver todas las opciones disponibles
-./airgeddon-gui.sh --help
+git pull --ff-only
+npm ci --omit=dev --ignore-scripts
+npm rebuild node-pty
+node -e "require('node-pty')"
 ```
 
-El lanzador comprueba las dependencias, libera el puerto `3845` si está ocupado, arranca el servidor, espera a que
-responda y abre la interfaz de forma adaptativa. Si no se detecta entorno gráfico, cambia automáticamente a modo servidor.
+Si tienes modificaciones locales, revísalas antes de actualizar.
 
-### Flujo típico
+## 🛠️ Problemas frecuentes
 
-1. Abre la aplicación y ve a **Interfaces**. Activa el **modo monitor** en tu adaptador WiFi.
-2. Lanza un **escaneo** desde la vista *Redes* o pulsa *Escanear redes* en el panel.
-3. Selecciona la red objetivo en la tabla y pulsa **Auditar**.
-4. El asistente va guideando: elige el tipo de ataque, confirma los avisos y deja que airgeddon trabaje.
-5. La consola inferior muestra **todo** lo que ocurre, en tiempo real.
+<details>
+<summary><strong>📂 No se encuentra airgeddon</strong></summary>
 
-### Atajos de teclado
+Comprueba que está instalado y utiliza `AIRGEDDON_DIR` para indicar su ubicación, como se muestra en las instrucciones de inicio.
 
-| Atajo | Acción |
-| :--- | :--- |
-| `Ctrl + K` | Búsqueda global |
-| `Ctrl + 1…9` | Cambiar de vista |
-| `Ctrl + B` | Mostrar / ocultar la barra lateral |
-| `` Ctrl + ` `` | Mostrar / ocultar la consola |
-| `Ctrl + F` | Buscar en la terminal |
-| `Ctrl + +` / `Ctrl + -` / `Ctrl + 0` | Tamaño de fuente de la terminal |
+</details>
 
----
+<details>
+<summary><strong>🔌 El adaptador WiFi no aparece o no permite activar el modo monitor</strong></summary>
 
-## 📋 Requisitos
+Comprueba que Linux reconoce el dispositivo y que sus controladores admiten ese modo.
 
-### Node.js
+</details>
 
-| Dependencia | Uso |
-| :--- | :--- |
-| `express` | Servidor HTTP local y API REST |
-| `ws` | WebSockets para la comunicación bidireccional con la PTY |
-| `node-pty` | Pseudo-terminal para interactuar con scripts Bash |
-| `@xterm/xterm` | Emulador de terminal en el navegador |
-| `lucide` | Iconografía de la interfaz |
-| `compression` | Compresión HTTP |
+<details>
+<summary><strong>🧩 Faltan herramientas</strong></summary>
 
-### Sistema
+Consulta **Diagnóstico** y el archivo [system-requirements.txt](system-requirements.txt).
 
-`sudo` · `iproute2` (`ip`) · `iw` · `wireless-tools` · `aircrack-ng` · `xterm` · `curl` · `git` ·
-`python3` + `Pillow` (solo para la integración de escritorio) · un navegador Chromium
-(Brave / Chrome / Chromium / Edge), que se usa como **motor de la ventana de aplicación**, no como
-navegador web.
+</details>
 
-Consulta [`system-requirements.txt`](system-requirements.txt) para los comandos exactos por distribución.
+<details>
+<summary><strong>💻 La aplicación no abre</strong></summary>
 
----
+Ejecuta `./airgeddon-gui.sh` desde una terminal para consultar el mensaje de error. Comprueba la versión de Node.js y que tienes un navegador compatible instalado.
 
-## 🏗️ Arquitectura
+</details>
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│  Ventana de escritorio (Chromium en modo --app)                  │
-│                                                                  │
-│  app.js ─── estado global, WebSocket, atajos, vistas              │
-│    ├── parser.js     clasifica la pantalla de airgeddon           │
-│    ├── interaction.js convierte los prompts en modales/tablas     │
-│    ├── views.js      render de las 7 vistas                        │
-│    ├── terminal.js   xterm.js + logs de sistema y eventos         │
-│    └── utils.js      helpers DOM, toasts, modales                 │
-└───────────────────────────┬──────────────────────────────────────┘
-                            │ WebSocket (/ws)
-┌───────────────────────────┴──────────────────────────────────────┐
-│  server.js — Node.js + Express (bind 127.0.0.1:3845)             │
-│                                                                  │
-│  · PTY (node-pty) ──► bash airgeddon.sh (vía sudo)               │
-│  · API REST ──► /api/scan, /api/interfaces, /api/config, ...     │
-│  · Escaneo nativo con airodump-ng (CSV en vivo)                  │
-└──────────────────────────────────────────────────────────────────┘
-```
+## 🔐 Uso autorizado
 
-El flujo es: **la PTY escribe → WebSocket difunde → xterm.js pinta → `terminal.getScreen()` extrae las últimas
-líneas → `parser.analyze()` clasifica → `interaction` abre el modal correspondiente → el clic o la tecla envía la
-respuesta de vuelta a la PTY.**
+Utiliza la aplicación únicamente en redes propias o con autorización de sus responsables.
 
-### Las 7 vistas
+## 🤝 Créditos y licencia
 
-`Panel` · `Auditorías` · `Redes` · `Interfaces` · `Historial` · `Configuración` · `Diagnóstico`
+Interfaz desarrollada por [sjcandy](https://github.com/sjcandy).
 
-### 🔒 Modelo de seguridad y aislamiento
+Basada en [airgeddon](https://github.com/v1s1t0r1sh3r3/airgeddon), desarrollado por v1s1t0r1sh3r3 y sus colaboradores.
 
-- **Aplicación de escritorio monousuario:** Diseñada para uso interactivo en la sesión gráfica del usuario local (`127.0.0.1`). No es un daemon multi-tenant ni un servicio web expuesto a internet.
-- **Autenticación criptográfica estricta:** Todas las rutas REST sensibles y mutadoras requieren autenticación vía cabecera `X-CSRF-Token` con token aleatorio de 32 bytes (`crypto.randomBytes`) validado en tiempo constante (`timingSafeEqual`). No se admite paso de tokens en query strings de URLs (`?_token=`).
-- **WebSockets seguros:** Handshake exclusivo mediante subprotocolo `airgeddon-auth, <TOKEN>`, rechazando orígenes externos y conexiones sin token.
-- **Aislamiento de subprocesos y control de PGID:** Los escaneos con `airodump-ng` se lanzan desacoplados (`detached: true`) y las sesiones interactivas de terminal PTY se instancian en una sesión POSIX propia (`setsid`). La resolución del PGID del servidor se efectúa de forma determinista mediante `/proc/self/stat` y `ps -o pgid=`. La rutina `killProcessTree()` valida estrictamente que jamás se transmitan señales de terminación (`SIGINT`/`SIGKILL`) al PID ni al PGID del servidor Node.js ni a procesos testigo ajenos.
-- **Gestión temporal de credenciales con temporizador absoluto independiente:** La contraseña de `sudo` solo reside en memoria y está sujeta a un temporizador de inactividad de 15 minutos (reiniciado ante cada operación activa) y a un **temporizador absoluto totalmente independiente de 2 horas** (`SUDO_MAX_LIFETIME_MS`) que no puede ser pospuesto por actividad, tras el cual se purga de memoria y se invalida la sesión en el kernel con `sudo -k`.
-
----
-
-## 🔄 Actualizaciones
-
-**Desde la interfaz:** Configuración → *Actualizaciones y Aplicación* → **Comprobar** → **Actualizar ahora**.
-
-**Desde la terminal:**
-
-```bash
-git pull --rebase
-npm install --production
-```
-
-> ⚠️ La actualización automática ejecuta `git pull --rebase` y `npm install` sobre el directorio de la
-> instalación. Revisa el diff en GitHub antes de aplicarla en un entorno de producción.
-
----
-
-## 🧪 Desarrollo
-
-```bash
-npm install       # dependencias
-npm test          # tests unitarios y de seguridad con node:test (parser, PGID, PTY, timeouts)
-npm run lint      # comprobación sintáctica de server.js, public/js/*.js y test/*.js
-```
-
-Para levantar la aplicación en modo escritorio durante el desarrollo:
-
-```bash
-./airgeddon-gui.sh
-```
-
-Contribuciones bienvenidas: fork, rama, `npm test` + `npm run lint`, commit y Pull Request.
-
----
-
-## 📄 Licencia y créditos
-
-Este proyecto se distribuye bajo la licencia **MIT**. Consulta [LICENSE](LICENSE).
-
-**airgeddon** es obra de [v1s1t0r1sh3r3](https://github.com/v1s1t0r1sh3r3) y se licencia bajo **GPLv3**.
-airgeddon GUI es un front-end independiente: **no incluye código de airgeddon**, lo invoca como proceso externo
-a través de una pseudo-terminal. Los logotipos de airgeddon (`public/img/airgeddon-logo.jpg` y
-`public/img/airgeddon-logo-full.png`) son propiedad de sus autores y se usan aquí con fines de identificación y
-atribución. `public/img/app-icon.png` y `public/img/favicon.png` son recursos propios de este proyecto (MIT).
+airgeddon GUI se distribuye bajo la [licencia MIT](LICENSE). El proyecto airgeddon mantiene su propia licencia.
 
 ---
 
 <div align="center">
 
-Hecho con ☕ para la comunidad de seguridad wireless
+📡 **airgeddon GUI** · Control visual para tus redes
 
-[**⬆ Volver arriba**](#airgeddon-gui)
+[↑ Volver arriba](#-airgeddon-gui)
 
 </div>

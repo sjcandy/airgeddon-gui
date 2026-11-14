@@ -3,7 +3,7 @@
 # airgeddon-gui — Creador de paquete nativo Debian / Kali / Ubuntu (.deb)
 # ==============================================================================
 # Permite generar un archivo .deb instalable con:
-#   sudo dpkg -i airgeddon-gui_2.0.0_all.deb
+#   sudo dpkg -i airgeddon-gui_2.0.0_amd64.deb
 # ==============================================================================
 
 set -e
@@ -11,7 +11,11 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKG_NAME="airgeddon-gui"
 PKG_VER="2.0.0"
-PKG_ARCH="all"
+PKG_ARCH="$(node -e '
+  const arch = { x64: "amd64", arm64: "arm64", arm: "armhf", ia32: "i386" }[process.arch];
+  if (process.platform !== "linux" || !arch) process.exit(1);
+  process.stdout.write(arch);
+')"
 BUILD_ROOT="${SCRIPT_DIR}/build-deb"
 PKG_DIR="${BUILD_ROOT}/${PKG_NAME}_${PKG_VER}_${PKG_ARCH}"
 
@@ -53,8 +57,8 @@ Version: ${PKG_VER}
 Section: net
 Priority: optional
 Architecture: ${PKG_ARCH}
-Depends: nodejs (>= 22.0.0), npm, bash, sudo, iproute2
-Recommends: aircrack-ng, xterm, curl, iw, ccze, wireless-tools, chromium | brave-browser | google-chrome-stable
+Depends: nodejs (>= 22.0.0), npm, bash, sudo, iproute2, curl
+Recommends: aircrack-ng, xterm, iw, ccze, wireless-tools, chromium | brave-browser | google-chrome-stable
 Suggests: python3-pil, mdk4, lighttpd, dnsmasq
 Homepage: https://github.com/sjcandy/airgeddon-gui
 Maintainer: sjcandy <sjcandy@users.noreply.github.com>
@@ -92,6 +96,7 @@ EOF
 
 cp -a "${SCRIPT_DIR}/public" "${PKG_DIR}/opt/airgeddon-gui/"
 cp -a "${SCRIPT_DIR}/node_modules" "${PKG_DIR}/opt/airgeddon-gui/"
+node "${SCRIPT_DIR}/scripts/prepare-package.js" "${PKG_DIR}/opt/airgeddon-gui"
 
 # 3. Lanzador global /usr/bin/airgeddon-gui
 cat << 'EOF' > "${PKG_DIR}/usr/bin/airgeddon-gui"
@@ -150,7 +155,7 @@ EOF
 chmod 755 "${PKG_DIR}/DEBIAN/prerm"
 
 # 8. Compilación con dpkg-deb
-dpkg-deb --build "$PKG_DIR" "${SCRIPT_DIR}/${PKG_NAME}_${PKG_VER}_${PKG_ARCH}.deb"
+dpkg-deb --root-owner-group --build "$PKG_DIR" "${SCRIPT_DIR}/${PKG_NAME}_${PKG_VER}_${PKG_ARCH}.deb"
 rm -rf "$BUILD_ROOT"
 
 echo "[✓] Paquete Debian creado: ${SCRIPT_DIR}/${PKG_NAME}_${PKG_VER}_${PKG_ARCH}.deb"

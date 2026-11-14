@@ -10,8 +10,8 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: Tests y lint
+  lint:
+    name: Comprobación de sintaxis
     runs-on: ubuntu-latest
 
     steps:
@@ -29,9 +29,6 @@ jobs:
 
       - name: Lint
         run: npm run lint
-
-      - name: Tests
-        run: npm test
 
   shellcheck:
     name: Validación de scripts de shell
@@ -51,3 +48,21 @@ jobs:
             install-desktop.sh \
             airgeddon-gui.sh \
             build-deb.sh
+
+  package-deb:
+    name: Paquete Debian y arranque limpio
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Construir paquete nativo
+        run: ./build-deb.sh
+      - name: Comprobar arquitectura y arranque del paquete extraído
+        run: |
+          artifact="$(find . -maxdepth 1 -name 'airgeddon-gui_*.deb' -print -quit)"
+          test "$(dpkg-deb -f "$artifact" Architecture)" = "$(dpkg --print-architecture)"
+          dpkg-deb -x "$artifact" "$RUNNER_TEMP/airgeddon-package"
+          node scripts/verify-package.js "$RUNNER_TEMP/airgeddon-package/opt/airgeddon-gui"

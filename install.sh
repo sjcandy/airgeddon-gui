@@ -94,6 +94,13 @@ if [ "$NODE_VER" -lt 22 ]; then
     fi
 fi
 
+# La actualización es opcional; continuar con una versión incompatible no lo es.
+NODE_VER=$(node -v | sed 's/v//' | cut -d. -f1)
+if ! [[ "$NODE_VER" =~ ^[0-9]+$ ]] || [ "$NODE_VER" -lt 22 ]; then
+    echo -e "${RED}[✗] Instala Node.js >= 22 antes de continuar.${NC}"
+    exit 1
+fi
+
 # 3. Comprobar npm
 if ! command -v npm &> /dev/null; then
     echo -e "${RED}[✗] npm no está disponible. Instálalo para continuar.${NC}"
@@ -163,8 +170,16 @@ for tool in aircrack-ng xterm curl iw; do
 done
 
 # node-pty es un módulo nativo: necesita compilador y Python para compilarse.
-if ! command -v cc &> /dev/null || ! command -v python3 &> /dev/null; then
-    MISSING_TOOLS+=("build-essential")
+if ! command -v cc &> /dev/null || ! command -v c++ &> /dev/null || ! command -v make &> /dev/null || ! command -v python3 &> /dev/null; then
+    case "$PKG_MANAGER" in
+        apt) MISSING_TOOLS+=(build-essential python3) ;;
+        pacman) MISSING_TOOLS+=(base-devel python) ;;
+        dnf|zypper) MISSING_TOOLS+=(gcc-c++ make python3) ;;
+        *)
+            echo -e "${RED}[✗] Instala un compilador C/C++, make y Python 3 antes de continuar.${NC}"
+            exit 1
+            ;;
+    esac
 fi
 
 if [ ${#MISSING_TOOLS[@]} -gt 0 ]; then
@@ -178,6 +193,11 @@ if [ ${#MISSING_TOOLS[@]} -gt 0 ]; then
             sudo apt install -y "${MISSING_TOOLS[@]}" ccze python3-pil || sudo apt install -y "${MISSING_TOOLS[@]}"
         elif [ "$PKG_MANAGER" = "dnf" ]; then
             sudo dnf install -y "${MISSING_TOOLS[@]}" ccze python3-pillow || sudo dnf install -y "${MISSING_TOOLS[@]}"
+        elif [ "$PKG_MANAGER" = "zypper" ]; then
+            sudo zypper install -y "${MISSING_TOOLS[@]}"
+        else
+            echo -e "${RED}[✗] Instala las herramientas indicadas manualmente y vuelve a ejecutar el instalador.${NC}"
+            exit 1
         fi
     else
         echo -e "${YELLOW}[!] Recuerda que airgeddon requiere aircrack-ng y xterm para ciertas auditorías.${NC}"
@@ -195,6 +215,37 @@ echo -e "${GREEN}[✓] Dependencias de Node.js instaladas correctamente.${NC}"
 # 7. Permisos de ejecución
 chmod +x "$SCRIPT_DIR/airgeddon-gui.sh" 2>/dev/null || true
 chmod +x "$SCRIPT_DIR/install-desktop.sh" 2>/dev/null || true
+
+# Guardar la ubicación como datos JSON, sin crear archivos shell ejecutables.
+node - "$AIRGEDDON_DIR" "${XDG_CONFIG_HOME:-$HOME/.config}/airgeddon-gui" <<'NODE'
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const [airgeddonDir, configDir] = process.argv.slice(2);
+if (!airgeddonDir || /[\r\n\0]/.test(airgeddonDir) || !fs.statSync(path.join(airgeddonDir, 'airgeddon.sh')).isFile()) {
+  throw new Error('La ubicación de airgeddon no es válida');
+}
+fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
+const stat = fs.lstatSync(configDir);
+if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid()) {
+  throw new Error('Directorio de configuración inseguro');
+}
+fs.chmodSync(configDir, 0o700);
+const target = path.join(configDir, 'settings.json');
+let settings = {};
+try { settings = JSON.parse(fs.readFileSync(target, 'utf8')); } catch (err) {
+  if (err.code !== 'ENOENT') throw err;
+}
+if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('Configuración no válida');
+settings.airgeddonDir = airgeddonDir;
+const temporary = path.join(configDir, `.settings.${crypto.randomBytes(12).toString('hex')}`);
+try {
+  fs.writeFileSync(temporary, JSON.stringify(settings, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
+  fs.renameSync(temporary, target);
+} finally {
+  try { fs.unlinkSync(temporary); } catch (err) { if (err.code !== 'ENOENT') throw err; }
+}
+NODE
 
 # 8. Integración en el escritorio de Linux (.desktop e iconos)
 echo -e "\n${CYAN}────────────────────────────────────────────────────────────${NC}"

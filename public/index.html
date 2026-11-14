@@ -5,12 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="color-scheme" content="dark light">
   <title>airgeddon GUI</title>
-  <link rel="icon" type="image/png" sizes="32x32" href="/img/favicon.png">
-  <link rel="icon" type="image/png" sizes="128x128" href="/img/logo-icon.png">
-  <link rel="icon" type="image/png" sizes="256x256" href="/img/app-icon.png">
-  <link rel="shortcut icon" href="/favicon.ico">
-  <link rel="apple-touch-icon" href="/img/app-icon.png">
-  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" type="image/png" sizes="32x32" href="/img/favicon.png?v=b582c55cc4e5">
+  <link rel="icon" type="image/png" sizes="128x128" href="/img/logo-icon.png?v=b582c55cc4e5">
+  <link rel="icon" type="image/png" sizes="256x256" href="/img/app-icon.png?v=b582c55cc4e5">
+  <link rel="shortcut icon" href="/favicon.ico?v=b582c55cc4e5">
+  <link rel="apple-touch-icon" href="/img/app-icon.png?v=b582c55cc4e5">
+  <link rel="manifest" href="/manifest.json?v=b582c55cc4e5">
   <meta name="theme-color" content="#0d1117">
   <meta name="application-name" content="airgeddon GUI">
   <meta name="apple-mobile-web-app-title" content="airgeddon GUI">
@@ -23,10 +23,11 @@
 </head>
 <body>
   <div class="app" id="app">
+    <div class="sidebar-scrim" id="sidebarScrim" data-action="toggle-mobile"></div>
     <aside class="sidebar" id="sidebar">
       <div class="sb-brand">
         <div class="brand-icon">
-          <img src="/img/logo-icon.png" alt="airgeddon" class="brand-img">
+          <img src="/img/logo-icon.png?v=b582c55cc4e5" alt="airgeddon" class="brand-img">
         </div>
         <div class="brand-text">
           <strong>airgeddon</strong>
@@ -114,6 +115,9 @@
             <span class="dot off" id="pillDot"></span>
             <span id="pillText">Sin sesión</span>
           </div>
+          <button class="icon-btn ghost" id="themeBtn" data-action="toggle-theme" title="Cambiar tema" aria-label="Cambiar tema claro u oscuro">
+            <i data-lucide="sun"></i>
+          </button>
           <button class="icon-btn ghost" id="killHungTop" data-action="kill-hung" title="Matar procesos colgados">
             <i data-lucide="shield-alert"></i>
           </button>
@@ -147,8 +151,8 @@
             <button class="console-tab" data-ctab="events">Eventos</button>
           </div>
           <div class="console-actions" data-no-toggle>
-            <button class="btn btn-accent btn-sm" id="btnReturnAssistant" data-action="return-assistant" style="height:24px;padding:0 9px;font-size:11px;font-weight:700;gap:5px;border-radius:6px;margin-right:6px" title="Volver a los pasos visuales del Asistente">
-              <i data-lucide="sparkles" style="width:12px;height:12px"></i><span>Asistente visual</span>
+            <button class="btn btn-accent btn-sm" id="btnReturnAssistant" data-action="return-assistant" title="Volver a los pasos visuales del Asistente">
+              <i data-lucide="sparkles"></i><span>Asistente visual</span>
             </button>
             <button class="icon-btn xs" id="consoleScroll" data-action="console-scroll" title="Ir al final">
               <i data-lucide="arrow-down-to-line"></i>
@@ -185,7 +189,6 @@
     </div>
   </div>
 
-  <div class="sidebar-scrim" id="sidebarScrim" data-action="toggle-mobile"></div>
   <div class="modal-root" id="modalRoot"></div>
   <div class="toast-root" id="toastRoot"></div>
 

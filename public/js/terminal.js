@@ -23,11 +23,11 @@ AG.terminal = (() => {
   const MAX_LOG = 600 * 1024;
 
   function themeFor(mode) {
-    // Terminal profesional con paleta GitHub-inspired
+    // Cristal ahumado en ambos temas; el contraste y la paleta ANSI no dependen de la interfaz.
     return {
-      background: '#0d1117',
-      foreground: '#e6edf3',
-      cursor: '#39d353',
+      background: '#00000000',
+      foreground: '#e5eeeb',
+      cursor: '#63d991',
       cursorAccent: '#0d1117',
       selectionBackground: 'rgba(57,211,83,.20)',
       black: '#0d1117',
@@ -38,7 +38,7 @@ AG.terminal = (() => {
       magenta: '#bc8cff',
       cyan: '#39d353',
       white: '#e6edf3',
-      brightBlack: '#484f58',
+      brightBlack: '#98aaa3',
       brightRed: '#ff7b72',
       brightGreen: '#56d364',
       brightYellow: '#e3b341',
@@ -56,6 +56,7 @@ AG.terminal = (() => {
     host = document.getElementById('terminalHost');
 
     term = new window.Terminal({
+      allowTransparency: true,
       cursorBlink: true,
       cursorStyle: 'bar',
       fontSize: fontSize,

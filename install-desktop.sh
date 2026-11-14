@@ -34,6 +34,7 @@ if [ "$1" = "--uninstall" ] || [ "$1" = "-u" ]; then
         rm -f "${HICOLOR_DIR}/${s}x${s}/apps/airgeddon-gui.png"
     done
     rm -f "${PIXMAPS_DIR}/airgeddon-gui.png"
+    rm -f "${PIXMAPS_DIR}"/airgeddon-gui-*.png
     rm -f "${HOME}/.local/share/icons/airgeddon-gui.png"
 
     if command -v update-desktop-database &> /dev/null; then
@@ -96,6 +97,14 @@ except Exception as e:
     }
 fi
 
+# Ruta de contenido versionada: evita reutilizar el icono antiguo en la caché de KDE.
+ICON_PATH="${PIXMAPS_DIR}/airgeddon-gui.png"
+if [ -n "$ICON_SOURCE" ] && command -v sha256sum &> /dev/null; then
+    ICON_CHECKSUM=$(sha256sum "$ICON_SOURCE")
+    ICON_PATH="${PIXMAPS_DIR}/airgeddon-gui-${ICON_CHECKSUM:0:12}.png"
+    cp "$ICON_SOURCE" "$ICON_PATH"
+fi
+
 # 3. Dar permisos de ejecución al script principal
 chmod +x "${SCRIPT_DIR}/airgeddon-gui.sh" 2>/dev/null || true
 
@@ -108,7 +117,7 @@ Name=airgeddon GUI
 GenericName=Auditoría de Redes WiFi
 Comment=Herramienta de auditoría inalámbrica con interfaz gráfica nativa
 Exec="${SCRIPT_DIR}/airgeddon-gui.sh"
-Icon=airgeddon-gui
+Icon=${ICON_PATH}
 Terminal=false
 Categories=Network;Security;System;
 StartupNotify=true
@@ -132,7 +141,7 @@ Name=airgeddon GUI
 GenericName=Auditoría de Redes WiFi
 Comment=Herramienta de auditoría inalámbrica con interfaz gráfica nativa
 Exec="${SCRIPT_DIR}/airgeddon-gui.sh"
-Icon=airgeddon-gui
+Icon=${ICON_PATH}
 Terminal=false
 NoDisplay=true
 StartupNotify=true
